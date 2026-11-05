@@ -171,7 +171,7 @@ custom_domain = true
 1. `UNSUB_SECRET`：两边完全一致（不一致 → 退订链接全部 400）
 2. `SUBSCRIBE_API_TOKEN`：两边同名同值（不一致 → Actions 拉名单 401）
 3. `CUSTOM_DOMAIN`：两边同值；若 GitHub 侧用了显式 `PUBLIC_BASE_URL`，必须与 Cloudflare 的对外地址一致
-4. `MAIL_FROM_ADDRESS` 属于 Resend 已验证域名。发件域名与 `CUSTOM_DOMAIN` **不必相同**：本项目站点在 `notice.example.com`（子域），发件用 `notice@example.com`（根域），只要 Resend 验证的是 `example.com` 即可。改完 `.env` 用 `python3 scripts/sync-secrets.py` 一次同步两端
+4. `MAIL_FROM_ADDRESS` 属于 Resend 已验证域名。发件域名与 `CUSTOM_DOMAIN` **不必相同**：本项目站点在 `notice.example.com`（子域），发件用 `notice@example.com`（根域），只要 Resend 验证的是 `example.com` 即可。改完 `.env` 用 `bash scripts/ops.sh secrets` 一次同步两端
 
 ---
 

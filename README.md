@@ -258,11 +258,12 @@ Dashboard → Worker → **Settings → Builds → Connect to Git**：
 ### 3. 云端配置与密钥
 
 ```bash
-python3 scripts/sync-secrets.py --dry-run   # 预览将同步的键
-python3 scripts/sync-secrets.py             # 同步 Cloudflare + GitHub 两端
+bash scripts/ops.sh secrets --dry-run   # 预览将同步的键（不上传）
+bash scripts/ops.sh secrets             # 同步 Cloudflare + GitHub 两端
 ```
 
-脚本从 `.env` 读取，跳过空值，密钥只经 stdin / 临时文件传递，不打印明文。
+分别上传也可以直接跑 `scripts/cf-secrets.sh`（Wrangler）与 `scripts/gh-secrets.sh`（gh）。
+脚本从 `.env` 读取、跳过空值，密钥只经 stdin / 临时文件传递，不打印明文。
 GitHub 侧需要 `gh auth login --web --scopes "repo,workflow"`；也可在两侧控制台手工填写。
 
 | 位置 | 内容 |
@@ -312,7 +313,7 @@ git push origin main
   `MAIL_FROM_ADDRESS` 只需属于 Resend 已验证域名。
 - `.env.example` 每项标注去处：`[CF-V]` / `[CF-S]` / `[GH]` / `[构建]` / `[本地]`。
 - `npm run sync-config` 把域名与 KV id 写进 `wrangler.toml`；
-  `scripts/sync-secrets.py` 把运行时配置同步到 Cloudflare 与 GitHub。
+  `bash scripts/ops.sh secrets` 把运行时配置同步到 Cloudflare 与 GitHub。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -327,7 +328,10 @@ yds-notifier/
 ├── config.yaml                   # 业务规则：数据源 / 去重 / 主题前缀
 ├── requirements.txt
 ├── scripts/
-│   └── sync-secrets.py           # .env → Cloudflare / GitHub Secrets 批量同步
+│   ├── ops.sh                    # 运维总入口：doctor / status / deploy / check ...
+│   ├── lib.sh                    # 公共函数：配置读取 / 输出 / Wrangler 包装
+│   ├── cf-secrets.sh             # .env → Cloudflare Worker Secrets（wrangler bulk）
+│   └── gh-secrets.sh             # .env → GitHub Actions Secrets（gh secret set）
 ├── docs/
 │   ├── Cloudflare自动部署指南.md   # Git 集成 + 自定义域名 + 环境变量清单
 │   ├── 安全评审报告.md             # 安全评审发现与修复
@@ -405,6 +409,22 @@ yds-notifier/
 
 ## 运维与自定义
 
+日常操作统一走 `bash scripts/ops.sh <命令>`（沿用其它项目运维脚本的约定：
+`lib.sh` 公共库 + 彩色 `step/ok/warn/die`，警告走 stderr，密钥一律不回显）：
+
+| 命令 | 作用 |
+|---|---|
+| `doctor` | 一次性体检：工具链、配置、两端登录与密钥、KV id 一致性、线上健康 |
+| `status` | 查看配置、线上端点、最近部署与 Actions 运行 |
+| `config show\|get\|set\|check` | 查看 / 修改 / 校验 `.env`（`show` 自动脱敏） |
+| `secrets` | 从 `.env` 同步密钥到 Cloudflare + GitHub（支持 `--dry-run`） |
+| `cf-secrets` / `gh-secrets` | 只同步其中一端（支持 `--only KEY` / `--list`） |
+| `dev-vars` | 从 `.env` 生成 `worker/.dev.vars` 供 `wrangler dev` 使用 |
+| `check` | Python 自测 + Worker 类型/测试/构建 + Wrangler 干跑 |
+| `deploy` | 构建并部署 Worker，随后探测 `/health` |
+| `notify normal\|check` / `logs` | 触发或查看 GitHub Actions |
+| `login` / `logout` | 登录 / 登出 Cloudflare |
+
 | 想做的事 | 改哪里 |
 |---|---|
 | 增删数据源 / 改抓取深度 | `config.yaml` |
@@ -413,8 +433,8 @@ yds-notifier/
 | 调整邮件样式 | `yds/mailer.py` 的 `build_html` |
 | 修改 Worker 界面 / 后端 | `worker/src/ui/` / `worker/src/handlers/` |
 | 调整栏目 | 同步修改 `worker/src/auth.ts` 的 `CATEGORIES` 与 `yds/recipients.py` 的 `CATEGORY_TO_KEY` |
-| 更换站点域名 | 改 `.env` 的 `CUSTOM_DOMAIN`，跑 `npm run sync-config` 与 `python3 scripts/sync-secrets.py` |
-| 更换发件地址 | 改 `.env` 的 `MAIL_FROM_ADDRESS` 并同步两端；Resend 侧需先验证该域名 |
+| 更换站点域名 | 改 `.env` 的 `CUSTOM_DOMAIN`，跑 `bash scripts/ops.sh secrets` 与 `bash scripts/ops.sh deploy` |
+| 更换发件地址 | 改 `.env` 的 `MAIL_FROM_ADDRESS` 并跑 `bash scripts/ops.sh secrets`；Resend 侧需先验证该域名 |
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
