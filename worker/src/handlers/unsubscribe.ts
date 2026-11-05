@@ -58,6 +58,7 @@ export async function handleUnsubscribe(req: Request, url: URL, env: Env): Promi
           "打开订阅页",
           requireBaseUrl(env),
           "对方重新登录控制台即可恢复订阅。",
+          cfg.siteName,
         ),
         `退订：${email}`,
       ).catch((e) => console.error("站长通知发送失败", e));

@@ -44,39 +44,102 @@ export async function sendMail(
   }
 }
 
-/** 登录 / 通知类邮件的通用外壳。文案由调用方传入并自行 esc 动态数据。 */
+/**
+ * 孟菲斯风格邮件外壳：与订阅页 `ui/styles.ts`、Python 通知邮件 `yds/mailer.py`
+ * 共用同一套视觉系统（奶油纸底 / 墨色粗描边 / 黄·珊瑚·蓝撞色 / 硬阴影 / 波点节奏）。
+ *
+ * 兼容性：全部用 table + 内联样式与离散色块，不依赖渐变、伪元素、SVG 或 flex，
+ * QQ 邮箱 / 163 / Gmail / 手机客户端都能降级显示；全程不使用 emoji。
+ * 文案约定：`intro` / `note` 允许简单 HTML，动态数据由调用方自行 esc；
+ * `title` / `ctaLabel` / `ctaUrl` / `siteName` 在此统一转义。
+ */
 export function mailShell(
   title: string,
   intro: string,
   ctaLabel: string,
   ctaUrl: string,
   note: string,
+  siteName = "研电赛通知订阅",
 ): string {
-  return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1"></head>
-<body style="margin:0;padding:0;background:#f7f8fc;">
-<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f7f8fc;padding:24px 12px;">
+  const INK = "#2E2A33";
+  const PAPER = "#FFF4E4";
+  const YELLOW = "#FFD93D";
+  const CORAL = "#FF6B6B";
+  const BLUE = "#4D96FF";
+
+  return `<!DOCTYPE html>
+<html lang="zh-CN"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="color-scheme" content="light only"></head>
+<body style="margin:0;padding:0;background:${PAPER};">
+<table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+       style="background:${PAPER};padding:22px 12px 30px;">
 <tr><td align="center">
 <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-  style="max-width:520px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;">
-  <tr><td style="background:linear-gradient(135deg,#FFE3EE 0%,#E8F0FF 52%,#E6FBF5 100%);
-                 border-radius:20px;padding:26px 24px;">
-    <div style="font-size:12px;color:#8a90a2;letter-spacing:1px;">YAN DIAN SAI · NOTICE</div>
-    <div style="padding:8px 0 0;font-size:21px;font-weight:700;color:#2b2f3d;">${esc(title)}</div>
+       style="max-width:600px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',
+              'PingFang SC','Microsoft YaHei',sans-serif;">
+
+  <!-- 头部：黄色撞色块 + 墨色粗描边 + 几何点缀 -->
+  <tr><td style="padding:0 0 6px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+           style="background:${YELLOW};border:3px solid ${INK};border-radius:8px;padding:24px;">
+      <tr>
+        <td valign="top">
+          <div style="font-size:12px;color:${INK};letter-spacing:1px;font-weight:700;">YAN DIAN SAI · NOTICE</div>
+          <div style="padding:10px 0 0;font-size:24px;font-weight:800;color:${INK};line-height:32px;">${esc(title)}</div>
+        </td>
+        <td align="right" valign="top" style="white-space:nowrap;">
+          <span style="display:inline-block;width:12px;height:12px;background:${CORAL};border:2px solid ${INK};border-radius:2px;"></span>
+          <span style="display:inline-block;width:10px;height:10px;background:${BLUE};border:2px solid ${INK};border-radius:50%;margin-left:6px;"></span>
+          <span style="display:inline-block;width:8px;height:8px;background:${INK};border-radius:50%;margin-left:6px;"></span>
+        </td>
+      </tr>
+    </table>
   </td></tr>
-  <tr><td style="padding:14px 0 0;"><table role="presentation" width="100%" cellpadding="0" cellspacing="0"
-    style="background:#fff;border-radius:16px;border:1px solid #f0f1f6;">
-    <tr><td style="padding:24px;">
-      <p style="margin:0 0 18px;font-size:14px;line-height:1.8;color:#5a6072;">${intro}</p>
-      <a href="${esc(ctaUrl)}" style="display:inline-block;padding:12px 30px;border-radius:24px;
-         background:linear-gradient(135deg,#FF9DB8 0%,#8FA9F5 100%);color:#ffffff;font-size:14px;
-         font-weight:600;text-decoration:none;">${esc(ctaLabel)}</a>
-      <p style="margin:20px 0 0;font-size:12px;color:#a0a4b8;line-height:1.8;">${note}</p>
-    </td></tr>
-  </table></td></tr>
-  <tr><td style="padding:16px 4px 0;font-size:11px;color:#b8bccb;line-height:1.8;text-align:center;">
+
+  <!-- 孟菲斯装饰条：撞色块 + 虚线节奏 -->
+  <tr><td style="padding:14px 2px 12px;">
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+      <td>
+        <span style="display:inline-block;width:20px;height:8px;background:${YELLOW};border:2px solid ${INK};border-radius:2px;vertical-align:middle;"></span>
+        <span style="display:inline-block;width:12px;height:8px;background:${CORAL};border:2px solid ${INK};border-radius:2px;vertical-align:middle;margin-left:6px;"></span>
+        <span style="display:inline-block;width:10px;height:10px;background:${BLUE};border:2px solid ${INK};border-radius:50%;vertical-align:middle;margin-left:6px;"></span>
+      </td>
+      <td align="right" style="font-size:11px;color:${INK};letter-spacing:3px;">- - - -</td>
+    </tr></table>
+  </td></tr>
+
+  <!-- 内容卡：白底 + 墨色粗描边；按钮带 4px 硬阴影 -->
+  <tr><td>
+    <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+           style="background:#ffffff;border:3px solid ${INK};border-radius:8px;">
+      <tr><td style="padding:26px 24px;">
+        <p style="margin:0 0 22px;font-size:14px;line-height:1.85;color:#4a4550;">${intro}</p>
+        <a href="${esc(ctaUrl)}"
+           style="display:inline-block;padding:12px 28px;background:${YELLOW};color:${INK};
+                  border:3px solid ${INK};border-radius:6px;box-shadow:4px 4px 0 ${INK};
+                  font-size:14px;font-weight:700;text-decoration:none;">${esc(ctaLabel)}</a>
+        <div style="margin-top:24px;padding:12px 14px;background:${PAPER};
+                    border:2px dashed ${INK};border-radius:6px;
+                    font-size:12px;color:#6b6572;line-height:1.8;">${note}</div>
+      </td></tr>
+    </table>
+  </td></tr>
+
+  <!-- 链接兜底 -->
+  <tr><td style="padding:16px 2px 0;font-size:11px;color:#8a90a2;line-height:1.8;">
     按钮点不开时，复制此链接到浏览器打开：<br>
-    <span style="color:#8a90a2;word-break:break-all;">${esc(ctaUrl)}</span>
+    <span style="color:${INK};word-break:break-all;">${esc(ctaUrl)}</span>
   </td></tr>
-</table></td></tr></table></body></html>`;
+
+  <!-- 页脚，与批量通知邮件保持一致 -->
+  <tr><td align="center" style="padding:24px 0 0;font-size:11px;color:#8a90a2;line-height:19px;">
+    本邮件由「${esc(siteName)}」自动推送 · 请勿直接回复
+  </td></tr>
+  <tr><td align="center" style="padding:10px 0 0;font-size:11px;color:#6b6572;">
+    —— 祝顺利，赛场见 ——
+  </td></tr>
+</table>
+</td></tr></table>
+</body></html>`;
 }
