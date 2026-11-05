@@ -18,7 +18,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from .config import derive_base_url, settings
+from .config import derive_base_url, derive_internal_base, settings
 from .mailer import build_html, build_text
 from .models import Attachment, Notice
 from .publish import build_payload, extract_deadline, payload_fingerprint
@@ -76,6 +76,18 @@ def main() -> int:
         derive_base_url("", "", "https://w.workers.dev") == "https://w.workers.dev",
     )
     check("三者都为空返回空串", derive_base_url() == "")
+    dev = "https://w.workers.dev"
+    pub = "https://notice.example.com"
+    check("机器接口优先 workers.dev", derive_internal_base(dev, pub) == dev)
+    check("无 workers.dev 时回退对外地址", derive_internal_base("", pub) == pub)
+    check("非 workers.dev 地址不被误用", derive_internal_base("https://evil.example", pub) == pub)
+    cand = settings.api_candidates("https://w.workers.dev/api/notices", "/api/notices")
+    check("接口候选优先主入口", cand[0] == "https://w.workers.dev/api/notices", str(cand))
+    check(
+        "接口候选含自定义域兜底",
+        f"{settings.public_base_url}/api/notices" in cand,
+        str(cand),
+    )
     check("退订 URL 由生效域名派生", settings.unsub_url.endswith("/unsubscribe") or not settings.public_base_url)
     check("名单 URL 由生效域名派生", settings.subscribe_api_url.endswith("/api/list") or not settings.public_base_url)
     check("归档同步 URL 由生效域名派生", settings.notices_api_url.endswith("/api/notices") or not settings.public_base_url)

@@ -101,7 +101,7 @@
 | 订阅中心 | Cloudflare Workers · TypeScript · esbuild · Wrangler |
 | 状态存储 | Workers KV（账号 / 订阅 / 会话） · Durable Objects（限流） |
 | 部署 | Cloudflare Workers Builds · Custom Domains |
-| 质量保障 | `yds.selftest`（58 项，FAIL 返回非零） · Worker e2e（142 项） · `tsc --noEmit` · Wrangler dry-run |
+| 质量保障 | `yds.selftest`（63 项，FAIL 返回非零） · Worker e2e（142 项） · `tsc --noEmit` · Wrangler dry-run |
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -480,6 +480,7 @@ yds-notifier/
 | 退订链接提示失效 | 多为两端 `UNSUB_SECRET` 不一致，或链接超过 `UNSUB_TTL_DAYS`（默认 180 天） |
 | Worker 读不到变量 | 变量填进了 Build variables（仅构建期可见），应移到 Variables and Secrets |
 | Actions 报 `pathspec 'data/seen.json'` | 状态文件未生成；工作流已做容错，也可用仓库内预置的空状态文件恢复 |
+| 归档 / RSS / 日历一直为空 | 看 Actions 日志有没有「归档数据已同步」；`403 Just a moment...` 是自定义域被 Cloudflare 托管质询，填 `WORKERS_DEV_URL` 让机器接口走 workers.dev（失败会自动回退） |
 | 会不会漏通知 | 状态回写失败时下轮会重发未确认的通知，宁可重复、不漏发 |
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
