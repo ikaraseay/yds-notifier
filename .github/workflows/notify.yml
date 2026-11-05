@@ -29,6 +29,35 @@ jobs:
     timeout-minutes: 15
     permissions:
       contents: write   # 仅用于把 data/seen.json、data/pending.json 提交回仓库
+    # 配置放在 job 级：契约自测、入口自检、抓取发信都读同一份环境变量。
+    # CI 上仓库里没有 .env，若只挂在「抓取」步骤，自测会因配置为空而失败。
+    # 完整清单见 .env.example 的「CI」标注项；仓库内不含任何密钥。
+    env:
+      CUSTOM_DOMAIN: ${{ secrets.CUSTOM_DOMAIN }}
+      WORKERS_DEV_URL: ${{ secrets.WORKERS_DEV_URL }}
+      PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
+      MAIL_PROVIDER: ${{ secrets.MAIL_PROVIDER || 'resend' }}
+      MAIL_FROM_ADDRESS: ${{ secrets.MAIL_FROM_ADDRESS }}
+      MAIL_FROM_NAME: ${{ secrets.MAIL_FROM_NAME || '研电赛通知' }}
+      MAIL_TO: ${{ secrets.MAIL_TO }}
+      REPLY_TO: ${{ secrets.REPLY_TO }}
+      SITE_NAME: ${{ secrets.SITE_NAME || '研电赛通知订阅' }}
+      RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+      SMTP_HOST: ${{ secrets.SMTP_HOST || 'smtp.qq.com' }}
+      SMTP_PORT: ${{ secrets.SMTP_PORT || '465' }}
+      SMTP_SECURITY: ${{ secrets.SMTP_SECURITY || 'ssl' }}
+      SMTP_USER: ${{ secrets.SMTP_USER }}
+      SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+      UNSUB_URL: ${{ secrets.UNSUB_URL }}
+      SUBSCRIBE_API_URL: ${{ secrets.SUBSCRIBE_API_URL }}
+      UNSUB_SECRET: ${{ secrets.UNSUB_SECRET }}
+      UNSUB_TTL_DAYS: ${{ secrets.UNSUB_TTL_DAYS || '180' }}
+      SUBSCRIBE_API_TOKEN: ${{ secrets.SUBSCRIBE_API_TOKEN }}
+      # 归档 / RSS / 日历的数据同步；NOTICES_API_URL 不填时自动派生
+      NOTICES_API_URL: ${{ secrets.NOTICES_API_URL }}
+      PUBLISH_NOTICES: ${{ secrets.PUBLISH_NOTICES || 'true' }}
+      REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+      TZ: Asia/Shanghai
     steps:
       - name: 检出仓库
         uses: actions/checkout@v4
@@ -53,35 +82,7 @@ jobs:
             echo "::error::python -m yds 未正确调用 main()"; exit 1;
           }
 
-      # 配置统一由 .env（本地）/ GitHub Secrets（CI）注入，仓库内不含任何密钥。
-      # 完整清单见 .env.example 的「CI」标注项。
       - name: 抓取通知并发送邮件
-        env:
-          CUSTOM_DOMAIN: ${{ secrets.CUSTOM_DOMAIN }}
-          WORKERS_DEV_URL: ${{ secrets.WORKERS_DEV_URL }}
-          PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
-          MAIL_PROVIDER: ${{ secrets.MAIL_PROVIDER || 'resend' }}
-          MAIL_FROM_ADDRESS: ${{ secrets.MAIL_FROM_ADDRESS }}
-          MAIL_FROM_NAME: ${{ secrets.MAIL_FROM_NAME || '研电赛通知' }}
-          MAIL_TO: ${{ secrets.MAIL_TO }}
-          REPLY_TO: ${{ secrets.REPLY_TO }}
-          SITE_NAME: ${{ secrets.SITE_NAME || '研电赛通知订阅' }}
-          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
-          SMTP_HOST: ${{ secrets.SMTP_HOST || 'smtp.qq.com' }}
-          SMTP_PORT: ${{ secrets.SMTP_PORT || '465' }}
-          SMTP_SECURITY: ${{ secrets.SMTP_SECURITY || 'ssl' }}
-          SMTP_USER: ${{ secrets.SMTP_USER }}
-          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          UNSUB_URL: ${{ secrets.UNSUB_URL }}
-          SUBSCRIBE_API_URL: ${{ secrets.SUBSCRIBE_API_URL }}
-          UNSUB_SECRET: ${{ secrets.UNSUB_SECRET }}
-          UNSUB_TTL_DAYS: ${{ secrets.UNSUB_TTL_DAYS || '180' }}
-          SUBSCRIBE_API_TOKEN: ${{ secrets.SUBSCRIBE_API_TOKEN }}
-          # 归档 / RSS / 日历的数据同步；NOTICES_API_URL 不填时自动派生
-          NOTICES_API_URL: ${{ secrets.NOTICES_API_URL }}
-          PUBLISH_NOTICES: ${{ secrets.PUBLISH_NOTICES || 'true' }}
-          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
-          TZ: Asia/Shanghai
         run: |
           MODE="${{ github.event.inputs.mode || 'normal' }}"
           if [ "$MODE" = "check" ]; then
