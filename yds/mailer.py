@@ -61,7 +61,8 @@ def build_subject(notices: Sequence[Notice], prefix: str) -> str:
 def build_text(notices: Sequence[Notice], site: str = "", unsubscribe_url: str = "") -> str:
     lines = [f"研电赛通知 · 共 {len(notices)} 条\n"]
     for i, n in enumerate(notices, 1):
-        lines.append(f"[{i}] {n.title}")
+        flag = "【更新】" if n.change_kind == "changed" else ""
+        lines.append(f"[{i}] {flag}{n.title}")
         lines.append(f"    {n.date_text}｜{n.category}｜{n.source}")
         if n.summary:
             lines.append(f"    {n.summary}")
@@ -102,13 +103,20 @@ def _notice_card(n: Notice) -> str:
     color, soft = CATEGORY_STYLE.get(n.category, ("#7B9EF8", "#EEF3FF"))
     is_soft = any(k in n.title for k in SOFT_BADGE)
 
-    badge = (
-        f'<span style="display:inline-block;padding:2px 9px;background:#FFD93D;color:#2E2A33;'
-        f'font-size:11px;border-radius:4px;margin-left:6px;vertical-align:middle;'
-        f'border:1px solid #2E2A33;font-weight:700;">动态</span>'
-        if is_soft
-        else ""
-    )
+    if n.change_kind == "changed":
+        badge = (
+            f'<span style="display:inline-block;padding:2px 9px;background:#FF6B6B;color:#ffffff;'
+            f'font-size:11px;border-radius:4px;margin-left:6px;vertical-align:middle;'
+            f'border:1px solid #2E2A33;font-weight:700;">更新</span>'
+        )
+    elif is_soft:
+        badge = (
+            f'<span style="display:inline-block;padding:2px 9px;background:#FFD93D;color:#2E2A33;'
+            f'font-size:11px;border-radius:4px;margin-left:6px;vertical-align:middle;'
+            f'border:1px solid #2E2A33;font-weight:700;">动态</span>'
+        )
+    else:
+        badge = ""
 
     attach_block = ""
     if n.attachments:
@@ -200,6 +208,10 @@ def build_html(
     now = datetime.now()
     greet = _greeting(now)
     count = len(notices)
+    count_label = (
+        "条通知有更新，已为你重新整理" if any(n.change_kind == "changed" for n in notices)
+        else "条新通知，已为你整理如下"
+    )
 
     unsub_block = ""
     if unsubscribe_url:
@@ -244,7 +256,7 @@ def build_html(
                     line-height:32px;">{_esc(greet)}</div>
         <div style="padding:8px 0 0;font-size:13px;color:#5a6072;line-height:22px;">
           研电赛有 <b style="background:#FF6B6B;color:#fff;padding:1px 8px;
-          border-radius:4px;">{count}</b> 条新通知，已为你整理如下
+          border-radius:4px;">{count}</b> {count_label}
         </div>
       </td></tr>
     </table>

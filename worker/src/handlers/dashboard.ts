@@ -6,11 +6,13 @@ import {
   destroyAllSessions,
   destroySession,
   getSession,
+  getSub,
   getUser,
-  normalizePrefs,
+  isConfirmed,
+  prefsFromBody,
+  putSub,
   putUser,
   readSessionToken,
-  type Prefs,
 } from "../auth";
 import { getConfig, type Env } from "../env";
 import { mailShell, sendMail } from "../mailer";
@@ -35,9 +37,14 @@ export async function handlePrefs(req: Request, env: Env): Promise<Response> {
   const user = await getUser(env.SUBS, email);
   if (!user) return jsonResp({ ok: false, login: true, message: "账号不存在" }, 401);
 
-  const body = (await req.json().catch(() => ({}))) as Partial<Prefs>;
-  user.prefs = normalizePrefs({ ...user.prefs, ...body });
+  const body = await req.json().catch(() => ({}));
+  user.prefs = prefsFromBody(body, user.prefs);
   await putUser(env.SUBS, user);
+  // sub: 里冗余一份偏好，/api/list 无需再读 user:，也避免两处不一致
+  const sub = await getSub(env.SUBS, email);
+  if (sub && isConfirmed(sub)) {
+    await putSub(env.SUBS, { ...sub, prefs: user.prefs });
+  }
   return jsonResp({ ok: true, prefs: user.prefs });
 }
 

@@ -3,7 +3,7 @@
  *
  * 目录约定：
  *   src/ui/         界面层：样式、脚本、HTML 骨架、具体页面
- *   src/handlers/   后端逻辑层：登录、控制台、退订、名单 API
+ *   src/handlers/   后端逻辑层：登录、控制台、退订、名单、归档、webhook
  *   src/env.ts      运行时配置（Cloudflare Variables & Secrets）
  *   src/security.ts 签名、CSRF、CSP、输入校验
  *   src/rate.ts     限流 Durable Object
@@ -15,10 +15,22 @@
 
 import { clearSessionCookie, getSession, getUser, readSessionToken } from "./auth";
 import { getConfig, type Env } from "./env";
-import { getCount, handleCount, handleList, health } from "./handlers/api";
+import { getCount, handleCount, handleList, handleStats, health } from "./handlers/api";
 import { handleDeleteAccount, handleLogout, handlePrefs } from "./handlers/dashboard";
-import { handleLogin, handleMagicVerify } from "./handlers/login";
+import {
+  handleArchive,
+  handleCalendar,
+  handleFeed,
+  handleNoticesPost,
+} from "./handlers/feed";
+import {
+  handleConfirm,
+  handleConfirmResend,
+  handleLogin,
+  handleMagicVerify,
+} from "./handlers/login";
 import { handleUnsubscribe } from "./handlers/unsubscribe";
+import { handleResendWebhook } from "./handlers/webhook";
 import { methodNotAllowed } from "./security";
 import { redirect } from "./ui/layout";
 import { dashboardPage, loginPage, messagePage } from "./ui/pages";
@@ -40,6 +52,34 @@ export default {
         return health();
       }
 
+      // ---- 公开内容：归档 / RSS / 日历 ----------------------------------
+      if (p === "/archive") {
+        if (m !== "GET") return methodNotAllowed("GET");
+        return handleArchive(env);
+      }
+      if (p === "/feed.xml") {
+        if (m !== "GET") return methodNotAllowed("GET");
+        return handleFeed(env);
+      }
+      if (p === "/calendar.ics") {
+        if (m !== "GET" && m !== "HEAD") return methodNotAllowed("GET, HEAD");
+        return handleCalendar(env);
+      }
+
+      // ---- 管理接口 ------------------------------------------------------
+      if (p === "/api/notices") {
+        if (m !== "POST") return methodNotAllowed("POST");
+        return handleNoticesPost(req, env);
+      }
+      if (p === "/api/stats") {
+        if (m !== "GET") return methodNotAllowed("GET");
+        return handleStats(req, env);
+      }
+      if (p === "/api/webhooks/resend") {
+        if (m !== "POST") return methodNotAllowed("POST");
+        return handleResendWebhook(req, env);
+      }
+
       // 首页：已登录直接进控制台，未登录看登录页
       if (p === "/") {
         if (m !== "GET") return methodNotAllowed("GET");
@@ -59,6 +99,16 @@ export default {
       if (p === "/login") {
         if (m !== "GET") return methodNotAllowed("GET");
         return handleMagicVerify(url, env);
+      }
+
+      if (p === "/confirm") {
+        if (m !== "GET") return methodNotAllowed("GET");
+        return handleConfirm(url, env);
+      }
+
+      if (p === "/api/confirm/resend") {
+        if (m !== "POST") return methodNotAllowed("POST");
+        return handleConfirmResend(req, env);
       }
 
       if (p === "/dashboard") {

@@ -74,7 +74,7 @@ cmd_config() {
       if [ -f "$CONFIG_FILE" ]; then
         # 密钥不回显 —— 这个输出可能进 CI 日志
         grep -vE '^\s*#|^\s*$' "$CONFIG_FILE" \
-          | sed -E 's/^([A-Z0-9_]*(SECRET|TOKEN|PASSWORD|KEY)[A-Z0-9_]*)=.*/\1="***"/' \
+          | sed -E 's/^([A-Z0-9_]*(SECRET|TOKEN|PASSWORD|KEY|WEBHOOK|HEARTBEAT)[A-Z0-9_]*)=.*/\1="***"/' \
           | sed 's/^/  /'
       else
         warn "还没有配置：cp .env.example .env"
@@ -135,7 +135,8 @@ cmd_dev_vars() {
     printf 'UNSUB_SECRET="%s"\n' "${UNSUB_SECRET:-}"
     printf 'UNSUB_SECRET_PREVIOUS="%s"\n' "${UNSUB_SECRET_PREVIOUS:-}"
     printf 'RESEND_API_KEY="%s"\n' "${RESEND_API_KEY:-}"
-    printf 'SUBSCRIBE_API_TOKEN="%s"\n\n' "${SUBSCRIBE_API_TOKEN:-}"
+    printf 'SUBSCRIBE_API_TOKEN="%s"\n' "${SUBSCRIBE_API_TOKEN:-}"
+    printf 'RESEND_WEBHOOK_SECRET="%s"\n\n' "${RESEND_WEBHOOK_SECRET:-}"
     printf '# --- Variables ---\n'
     printf 'SITE_NAME="%s"\n' "${SITE_NAME:-研电赛通知订阅}"
     printf 'MAIL_FROM_ADDRESS="%s"\n' "${MAIL_FROM_ADDRESS:-}"
@@ -145,6 +146,7 @@ cmd_dev_vars() {
     printf 'MAX_PER_IP_HOUR="%s"\n' "${MAX_PER_IP_HOUR:-10}"
     printf 'MAX_CONFIRM_PER_DAY="%s"\n' "${MAX_CONFIRM_PER_DAY:-200}"
     printf 'LIST_RATE_PER_HOUR="%s"\n' "${LIST_RATE_PER_HOUR:-60}"
+    printf 'DOUBLE_OPT_IN="%s"\n' "${DOUBLE_OPT_IN:-true}"
   } > "$DEV_VARS"
   ok "已写入 $DEV_VARS"
   note "该文件已被 .gitignore 忽略；线上配置用 ops.sh secrets"

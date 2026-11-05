@@ -101,6 +101,7 @@ custom_domain = true
 | `RESEND_API_KEY` | `re_...` | **必填** |
 | `SUBSCRIBE_API_TOKEN` | 另一个 `openssl rand -hex 32` | **必填**，与 GitHub 同名同值（旧名 `ADMIN_TOKEN` 仍兼容） |
 | `UNSUB_SECRET_PREVIOUS` | 旧签名密钥 | 可选，密钥轮换期使用 |
+| `RESEND_WEBHOOK_SECRET` | `whsec_...` | 可选，Resend Webhook 签名密钥；留空时 webhook 端点返回 503（fail-closed） |
 
 ### 3.2 Settings → Variables and Secrets → **Variables**（明文）
 
@@ -115,9 +116,25 @@ custom_domain = true
 | `SITE_NAME` | `研电赛通知订阅` | 否 | 页面/邮件标题 |
 | `UNSUB_TTL_DAYS` | `180` | 否 | 退订链接有效天数，与 GitHub 同值 |
 | `MAX_PER_IP_HOUR` / `MAX_CONFIRM_PER_DAY` / `LIST_RATE_PER_HOUR` | `10` / `200` / `60` | 否 | 限流参数 |
+| `DOUBLE_OPT_IN` | `true` | 否 | 首次订阅需二次确认；填 `false` 回到「点登录链接即订阅」 |
 
 > `CUSTOM_DOMAIN`、`WORKERS_DEV_URL`、`PUBLIC_BASE_URL` 三者至少填一个，否则 Worker 会因
 > 无法确定对外地址而 fail-closed（登录接口返回 500，日志里能看到明确提示）。
+
+### 3.2.1 Resend Webhook（可选，推荐）
+
+在 Resend → **Webhooks** 添加端点 `https://<站点>/api/webhooks/resend`，
+事件勾选 `email.bounced`、`email.complained`、`suppression.added`，
+把生成的 **Signing Secret**（`whsec_...`）填为 Cloudflare Secret `RESEND_WEBHOOK_SECRET`。
+Worker 会按 Svix 规范验签（时间戳 ±5 分钟防重放），验证通过后把该邮箱移出名单并写入抑制标记。
+未配置密钥时端点直接 503，不会被伪造请求删订阅者。
+
+### 3.2.2 告警与心跳（可选，GitHub 侧）
+
+`ALERT_WEBHOOK_URL` 填失败时接收 POST JSON 的 webhook（企业微信 / 飞书 / Slack 等），
+未配置时失败运行会显式 `::error::` 而不会静默通过；
+`HEARTBEAT_URL` 填外部 dead-man switch 的 ping 地址，成功运行会打一次心跳，
+「该来没来」即告警，可覆盖定时任务被 60 天规则禁用与抓取静默停摆。
 
 ### 3.3 Bindings（不是环境变量）
 
@@ -163,6 +180,8 @@ custom_domain = true
 | `UNSUB_TTL_DAYS` | `180` | 同 3.2 |
 | `MAIL_PROVIDER` / `MAIL_FROM_NAME` / `SITE_NAME` / `REPLY_TO` | 文案类 | 可选 |
 | `SMTP_*` | 仅 `MAIL_PROVIDER=smtp` | 可选 |
+| `PUBLISH_NOTICES` / `NOTICES_API_URL` | `true` / 留空自动派生 | 归档 / RSS / 日历同步开关，可选 |
+| `HEARTBEAT_URL` / `ALERT_WEBHOOK_URL` | 外部拨测 / 告警地址 | 失败可见性，可选 |
 
 `UNSUB_URL` / `SUBSCRIBE_API_URL` 已由 `CUSTOM_DOMAIN` 自动派生，新部署不用填；旧部署若填过，仍会作为显式覆盖优先生效。
 
@@ -171,6 +190,7 @@ custom_domain = true
 1. `UNSUB_SECRET`：两边完全一致（不一致 → 退订链接全部 400）
 2. `SUBSCRIBE_API_TOKEN`：两边同名同值（不一致 → Actions 拉名单 401）
 3. `CUSTOM_DOMAIN`：两边同值；若 GitHub 侧用了显式 `PUBLIC_BASE_URL`，必须与 Cloudflare 的对外地址一致
+4. `RESEND_WEBHOOK_SECRET` 只在 Cloudflare（Webhook 由 Worker 直接接收），且必须与 Resend 端点显示的签名密钥一致
 4. `MAIL_FROM_ADDRESS` 属于 Resend 已验证域名。发件域名与 `CUSTOM_DOMAIN` **不必相同**：本项目站点在 `notice.example.com`（子域），发件用 `notice@example.com`（根域），只要 Resend 验证的是 `example.com` 即可。改完 `.env` 用 `bash scripts/ops.sh secrets` 一次同步两端
 
 ---

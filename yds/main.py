@@ -2,8 +2,8 @@
 
 用法：
     python -m yds --check              # 只抓取并打印，不写状态、不发信（排查解析用）
-    python -m yds --dry-run            # 完整流程，但邮件不真正发送（写状态可选）
-    python -m yds                      # 正常运行：抓取 -> 对比 -> 发信 -> 更新 data/seen.json
+    python -m yds --dry-run            # 完整流程，但不发信、不写状态
+    python -m yds                      # 抓取 -> 变更检测 -> 发信 -> 状态落盘
     python -m yds --preview out.html   # 把最近抓到的通知渲染成本地 HTML 预览
 """
 
@@ -13,19 +13,22 @@ import argparse
 import logging
 import os
 import sys
+from datetime import date
 from typing import Dict, List
 
 import yaml
 
 from . import fetch  # noqa: F401  (提前初始化 session)
 from .config import settings
-from .mailer import build_html, build_subject, build_text, sort_notices
+from .dispatch import dispatch
+from .mailer import build_html, build_text, sort_notices
 from .models import Notice
-from .senders import build_client
+from .publish import build_payload, notices_from_state, payload_fingerprint, publish_notices
 from .recipients import resolve_recipients, split_recipients
+from .senders import build_client
 from .sources import BaseSource, build_sources
 from .state import State
-from .unsub import build_list_unsubscribe_headers, build_unsubscribe_url
+from .unsub import build_unsubscribe_url
 
 log = logging.getLogger("yds")
 
@@ -49,30 +52,24 @@ def collect(sources: List[BaseSource], enrich: bool = True) -> List[Notice]:
         for item in items:
             if enrich:
                 item = src.enrich(item)
-                if item is None:  # enrich_only 过滤掉的非候选条目
+                if item is None:
                     continue
             prev = merged.get(item.uid)
             if prev is None:
                 merged[item.uid] = item
-            else:
-                # 同一通知多源出现时，保留附件更全的那份，并拼接来源
-                if len(item.attachments) > len(prev.attachments):
-                    item.source = f"{prev.source} / {item.source}"
-                    merged[item.uid] = item
+            elif len(item.attachments) > len(prev.attachments):
+                item.source = f"{prev.source} / {item.source}"
+                merged[item.uid] = item
     return list(merged.values())
 
 
 def collect_meta(sources: List[BaseSource]) -> List[Notice]:
-    """只抓列表页，不抓详情页。
-
-    高频轮询（每 10 分钟）用这个：研创网列表页本身带标题、日期和文章 id，
-    一次请求 0.3 秒即可判断有没有新公告，对源站压力极小。
-    """
+    """只抓列表页：高频轮询下先判断有没有变化，再决定是否抓详情。"""
     return collect(sources, enrich=False)
 
 
 def enrich_only(sources: List[BaseSource], wanted: set) -> List[BaseSource]:
-    """包一层：让数据源只对候选 uid 抓详情页，其余条目直接丢弃。"""
+    """包一层：让数据源只对指定 uid 抓详情页，其余条目直接丢弃。"""
     for src in sources:
         original = src.enrich
 
@@ -90,9 +87,9 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--config", default=os.path.join(ROOT, "config.yaml"))
     parser.add_argument("--state", default=None, help="覆盖状态文件路径")
     parser.add_argument("--check", action="store_true", help="只抓取并打印结果")
-    parser.add_argument("--dry-run", action="store_true", help="不真正发信")
+    parser.add_argument("--dry-run", action="store_true", help="不真正发信、不写状态")
     parser.add_argument("--preview", metavar="FILE", help="导出一份 HTML 预览")
-    parser.add_argument("--max-notify", type=int, default=0, help="单封邮件的最大条目数（默认取 config.yaml）")
+    parser.add_argument("--max-notify", type=int, default=0, help="单封邮件的最大条目数")
     parser.add_argument("--to", default="", help="临时覆盖收件人，测试时用")
     parser.add_argument("-v", "--verbose", action="store_true")
     args = parser.parse_args(argv)
@@ -104,21 +101,16 @@ def main(argv: List[str] | None = None) -> int:
     )
 
     cfg = load_config(args.config)
+    if args.max_notify:
+        cfg["max_notify"] = args.max_notify
     sources = build_sources(cfg)
     if not sources:
         log.error("没有启用任何数据源，请检查 %s", args.config)
         return 2
 
-    # --- 第一轮：只抓列表页，快速判断有没有新公告 -------------------------
-    # 发信配置预检放在最前面：高频轮询下配置错了要立刻暴露，
-    # 而不是抓完详情、写完状态才发现发不出去
     sender = build_client(cfg.get("mail") or {})
     static_to = args.to or settings.mail_to
-    recipients = resolve_recipients(
-        static_to,
-        settings.subscribe_api_url,
-        settings.subscribe_api_token,
-    )
+    recipients = resolve_recipients(static_to, settings.subscribe_api_url, settings.subscribe_api_token)
     needs_send = not (args.check or args.preview)
     if needs_send:
         if not recipients:
@@ -129,147 +121,157 @@ def main(argv: List[str] | None = None) -> int:
             log.error("发信配置不完整：%s", warn)
             return 2
 
+    # --- 第一轮：只抓列表页 -------------------------------------------------
     log.info("开始探测，共 %s 个数据源", len(sources))
     meta = collect_meta(sources)
     log.info("列表页共 %s 条", len(meta))
+    if not meta:
+        # 官网改版 / 全站不可达时必须让 CI 变红，不能伪装成「无新公告」
+        log.error("列表页 0 条：疑似官网改版或抓取全部失败，请检查数据源与解析器")
+        return 1
 
     state_path = args.state or os.path.join(ROOT, cfg.get("state_file", "data/seen.json"))
     state = State(state_path, keep=int(cfg.get("state_keep", 800)))
+    if state.corrupt:
+        log.error("状态文件损坏，已中止（避免误判首次运行而群发基线邮件）")
+        return 2
     first_run = state.is_first_run
 
-    if first_run:
-        pending = meta
-    else:
-        pending = [n for n in meta if not state.has(n)]
+    changed_uids = set()
+    candidates: List[Notice] = []
+    for n in meta:
+        kind = "new" if first_run else state.classify(n)
+        if kind in ("new", "changed"):
+            n.change_kind = kind
+            candidates.append(n)
+            if kind == "changed":
+                changed_uids.add(n.uid)
 
-    # 没有新内容就立即退出：高频轮询下 99% 的运行都走这条路径，省时间也省源站带宽
-    if not pending and not args.check:
-        log.info("无新公告，结束（未抓取详情页）")
-        return 0
+    # --- 每日一次详情抽检：发现同一文章 ID 下的正文 / 附件修订 ---------------
+    today = date.today().isoformat()
+    full_check = bool(
+        not first_run and not args.check and not args.preview
+        and state.last_detail_check() != today
+    )
+    check_uids: set = set()
+    if full_check:
+        limit = max(1, int(cfg.get("full_check_limit", 30)))
+        seen = [n for n in meta if state.classify(n) == "same"]
+        check_uids = {n.uid for n in sorted(seen, key=lambda x: x.date_text, reverse=True)[:limit]}
+        log.info("每日详情抽检 %s 条（用于发现正文 / 附件更新）", len(check_uids))
 
-    # --- 第二轮：只对候选条目抓详情页，补摘要与附件 -----------------------
-    log.info("发现 %s 条候选，开始抓详情", len(pending))
-    notices = collect(enrich_only(sources, {n.uid for n in pending}))
-    if len(notices) < len(pending):
-        log.warning("详情抓取覆盖 %s/%s 条，缺失的仍会按列表页信息推送", len(notices), len(pending))
+    # --- 第二轮：只抓候选 + 抽检条目的详情页 --------------------------------
+    wanted = {n.uid for n in candidates} | check_uids
+    detailed: List[Notice] = []
+    if wanted:
+        log.info("开始抓详情：候选 %s 条 + 抽检 %s 条", len(candidates), len(check_uids))
+        detailed = collect(enrich_only(build_sources(cfg), wanted))
+    detail_by_uid = {n.uid: n for n in detailed}
+
+    merged: Dict[str, Notice] = {}
+    for n in candidates:
+        d = detail_by_uid.get(n.uid)
+        if d:
+            d.change_kind = n.change_kind
+            merged[n.uid] = d
+        else:
+            merged[n.uid] = n
+
+    for uid in check_uids:
+        d = detail_by_uid.get(uid)
+        if d and state.detail_changed(d):
+            d.change_kind = "changed"
+            merged[uid] = d
+            changed_uids.add(uid)
+            log.info("检测到内容更新：%s", d.title)
+
+    if detailed:
+        state.record_detail_baseline(detailed)
+    if full_check:
+        state.touch_detail_check(today)
 
     if args.check:
-        for n in sort_notices(notices):
-            log.info("%s | %-8s | %-14s | %s", n.date_text, n.category, n.source, n.title)
-            if n.attachments:
-                for a in n.attachments:
-                    log.info("      附件: %s", a.name)
+        for n in sort_notices(list(merged.values()) or meta):
+            flag = "【更新】" if n.change_kind == "changed" else ""
+            log.info("%s | %-8s | %-14s | %s%s", n.date_text, n.category, n.source, flag, n.title)
         return 0
 
+    if not merged and not args.preview:
+        # 没有新内容：只在抽检刷新过指纹时才落盘，避免每 10 分钟产生一次 git 提交
+        if full_check:
+            state.save()
+        else:
+            log.info("无新公告，结束（未抓取详情页推送）")
+        return 0
+
+    fresh = sort_notices(list(merged.values()))
     if first_run and cfg.get("on_first_run", "baseline") == "baseline":
-        # 首次运行：把现存通知全部记为已读，只发一封汇总，避免一次涌入上百封
-        latest = sort_notices(notices)[: int(cfg.get("baseline_size", 8))]
-        state.mark(meta)
-        state.save()
-        log.info("首次运行，已建立基线（%s 条），本轮推送最近 %s 条", len(meta), len(latest))
-        fresh = latest
-        subject_prefix = cfg.get("subject_prefix", "【研电赛】") + "首次订阅确认"
-    else:
-        fresh = sort_notices(notices)
-        subject_prefix = cfg.get("subject_prefix", "【研电赛】") + "新通知"
+        fresh = fresh[: int(cfg.get("baseline_size", 8))]
+        log.info("首次运行，建立基线（%s 条），本轮推送最近 %s 条", len(meta), len(fresh))
 
     if args.preview:
         preview_email = (split_recipients(static_to) or [""])[0]
-        preview_unsub = build_unsubscribe_url(
-            settings.unsub_url, settings.unsub_secret, preview_email
-        )
+        preview_unsub = build_unsubscribe_url(settings.unsub_url, settings.unsub_secret, preview_email)
         body = build_html(
-            sort_notices(notices)[:30],
-            site=settings.site_name,
-            unsubscribe_url=preview_unsub,
+            (fresh or meta)[:30], site=settings.site_name, unsubscribe_url=preview_unsub,
         )
         with open(args.preview, "w", encoding="utf-8") as fh:
             fh.write(body)
         log.info("预览已写入 %s", args.preview)
-        # 预览只是渲染样张，不应继续走发信与状态写入
         return 0
 
     if not fresh:
         log.info("没有新通知，本轮不发信")
         return 0
 
-    log.info("发现 %s 条新通知", len(fresh))
+    log.info("本轮待推 %s 条（新增 %s / 更新 %s）", len(fresh), len(fresh) - len(changed_uids), len(changed_uids))
     for n in fresh:
-        log.info("  + %s | %s", n.date_text, n.title)
+        log.info("  %s %s | %s", "【更新】" if n.change_kind == "changed" else "+", n.date_text, n.title)
 
-    site = settings.site_name
-    repo_url = settings.repo_url
-    issue_url = f"{repo_url}/issues" if repo_url else ""
-
-    # 退订链接按收件人单独签发；没有配置就干脆不出现退订按钮，
-    # 不降级成「全局停用」或「无签名链接」（见安全评审报告 S-02）
-    unsub_base = settings.unsub_url
-    unsub_secret = settings.unsub_secret
-    unsub_ready = bool(unsub_base and unsub_secret)
-    if not unsub_ready:
-        log.warning("未配置 UNSUB_SECRET 或对外域名（CUSTOM_DOMAIN / WORKERS_DEV_URL），邮件里不会出现退订按钮")
-
-    # 分批发信，单封不超过 max-notify
-    max_notify = max(1, args.max_notify or int(cfg.get("max_notify", 25)))
-    batches = [fresh[i : i + max_notify] for i in range(0, len(fresh), max_notify)]
-    log.info("发信通道：%s（%s）", sender.provider, sender.from_header)
+    # --- 归档 / RSS / 日历的数据同步（附加能力，失败不阻断发信） -------------
+    if not args.dry_run:
+        all_items = {n.uid: n for n in meta}
+        for n in notices_from_state(state):
+            all_items.setdefault(n.uid, n)
+        payload = build_payload(list(all_items.values()), int(cfg.get("notices_limit", 200)))
+        fp = payload_fingerprint(payload)
+        if fp != state.published_hash and publish_notices(payload):
+            state.set_published_hash(fp)
 
     if args.dry_run:
-        for idx, batch in enumerate(batches, 1):
-            suffix = f"（{idx}/{len(batches)}）" if len(batches) > 1 else ""
-            subject = build_subject(batch, subject_prefix) + suffix
-            for rcpt in recipients:
-                mine = [n for n in batch if rcpt.wants(n.category)]
-                log.info(
-                    "[dry-run] 将发送：%s -> %s（%s 条，原 %s 条）",
-                    subject, rcpt.email, len(mine), len(batch),
-                )
-        sample_unsub = (
-            build_unsubscribe_url(unsub_base, unsub_secret, recipients[0].email)
-            if unsub_ready else ""
+        sample = build_unsubscribe_url(
+            settings.unsub_url, settings.unsub_secret, recipients[0].email
         )
-        if sample_unsub:
-            log.info("[dry-run] 退订链接示例：%s", sample_unsub)
-        print(build_text(fresh, site=site, unsubscribe_url=sample_unsub))
+        print(build_text(fresh, site=settings.site_name, unsubscribe_url=sample))
         log.info("dry-run 结束，未发信、未更新状态")
         return 0
 
-    ok = 0
-    failed: List[str] = []
-    for idx, batch in enumerate(batches, 1):
-        suffix = f"（{idx}/{len(batches)}）" if len(batches) > 1 else ""
-        subject = build_subject(batch, subject_prefix) + suffix
-        # 每封邮件独立渲染：收件人不同，退订链接必须绑定到具体邮箱
-        for rcpt in recipients:
-            # 按收件人勾选的栏目过滤：只发他关心的分类
-            mine = [n for n in batch if rcpt.wants(n.category)]
-            if not mine:
-                log.info("%s 本轮通知不符合其栏目偏好，跳过", rcpt.email)
-                continue
-            unsub_for = (
-                build_unsubscribe_url(unsub_base, unsub_secret, rcpt.email)
-                if unsub_ready else ""
-            )
-            html_body = build_html(
-                mine, site=site, repo_url=repo_url,
-                unsubscribe_url=unsub_for, issue_url=issue_url,
-            )
-            text_body = build_text(mine, site=site, unsubscribe_url=unsub_for)
-            try:
-                sender.send(
-                    [rcpt.email], subject, text_body, html_body,
-                    build_list_unsubscribe_headers(unsub_for),
-                )
-                ok += 1
-            except Exception as exc:  # noqa: BLE001 - 单个收件人失败不阻断其他人
-                log.error("发送给 %s 失败：%s", rcpt.email, exc)
-                failed.append(rcpt.email)
-        state.mark(batch)
+    # --- 发信编排：即时 / 日报 / 周报 / 暂停 --------------------------------
+    pending_path = os.path.join(ROOT, "data/pending.json")
+    result = dispatch(
+        sender=sender, notices=fresh, recipients=recipients, cfg=cfg,
+        pending_path=pending_path,
+    )
+    log.info(
+        "完成：%s 条通知 × %s 个收件人，成功发出 %s 封，摘要 %s",
+        len(fresh), len(recipients), result.sent, result.digest_sent or "无",
+    )
 
+    if result.failed:
+        # 关键事务边界：有即时收件人失败就不写 seen，下一轮会重发
+        log.error("以下收件人发送失败（本轮不标记已读，下轮重试）：%s", ", ".join(result.failed))
+        state.save()  # 只保存抽检指纹 / 归档指纹，不保存 mark
+        return 1
+
+    # 首次运行要把未推送的历史条目也标为已读；尽量用抓过详情的版本存指纹
+    if first_run:
+        all_marked = dict(merged)
+        for n in meta:
+            all_marked.setdefault(n.uid, n)
+        state.mark(list(all_marked.values()))
+    else:
+        state.mark(fresh)
     state.save()
-    log.info("完成：%s 条通知 × %s 个收件人，成功 %s 次", len(fresh), len(recipients), ok)
-    if failed:
-        log.error("以下收件人发送失败：%s", ", ".join(failed))
     return 0
 
 

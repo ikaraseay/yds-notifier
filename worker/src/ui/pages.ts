@@ -1,6 +1,6 @@
 /** 界面层：具体页面（登录页、控制台、通用结果页）。 */
 
-import { CATEGORIES, type User } from "../auth";
+import { CATEGORIES, type Frequency, type User } from "../auth";
 import { esc } from "../security";
 import { page } from "./layout";
 import { LOGIN_SCRIPT, PREFS_SCRIPT } from "./scripts";
@@ -21,13 +21,23 @@ export function loginPage(site: string, count: number, deleted = false): Respons
         <div id="msg" role="status" aria-live="polite"></div>
       </form>`,
     extra: `<div class="tip">
-      不用设置密码：填邮箱后会收到一封登录邮件，<strong>点里面的链接就直接进入</strong>。
-      首次进入会自动注册并订阅，之后可在控制台挑选想收的栏目，或随时注销账户。<br>
-      链接 15 分钟内有效、且只能用一次。
+      不用设置密码：填邮箱后会收到一封登录邮件，<strong>点里面的链接验证邮箱</strong>；
+      首次订阅还会再收到一封确认邮件，点过确认才开始收通知。<br>
+      登录链接 15 分钟内有效、只能用一次。
+    </div>
+    <div class="tip" style="margin-top:12px">
+      也能用 <a href="/archive">通知归档</a> · <a href="/feed.xml">RSS</a> ·
+      <a href="/calendar.ics">日历订阅</a> 查看全部通知，不必注册。
     </div>`,
     script: LOGIN_SCRIPT,
   });
 }
+
+const FREQ_LABEL: Record<Frequency, string> = {
+  instant: "有新通知就发",
+  daily: "每天一封摘要",
+  weekly: "每周一封摘要",
+};
 
 export function dashboardPage(user: User): Response {
   const opts = CATEGORIES.map((c) => {
@@ -40,6 +50,14 @@ export function dashboardPage(user: User): Response {
 </label>`;
   }).join("\n");
 
+  const pending = user.status === "pending";
+  const freqOptions = (Object.keys(FREQ_LABEL) as Frequency[])
+    .map(
+      (k) =>
+        `<option value="${k}"${user.prefs.frequency === k ? " selected" : ""}>${esc(FREQ_LABEL[k])}</option>`,
+    )
+    .join("");
+
   return page({
     title: "控制台",
     heading: "通知<em>设置</em>",
@@ -49,8 +67,32 @@ export function dashboardPage(user: User): Response {
         <span>${esc(user.email)}</span>
         <a href="#" id="logout">退出登录</a>
       </div>
+      ${pending ? `<div class="alert err" id="pending-box" role="status">
+        还差一步：我们给 <b>${esc(user.email)}</b> 发了一封确认邮件，点里面的链接才会开始收通知。
+        <button type="button" id="resend" class="btn-secondary" style="margin-top:10px">重新发送确认邮件</button>
+      </div>` : ""}
       <div id="opts" class="opts">${opts}</div>
+      <div class="section">
+        <h2>推送频率</h2>
+        <p class="sub" style="font-size:12px;margin:0 0 10px">
+          不想被频繁打扰？改成日报或周报，同一时段的通知会合并成一封。
+        </p>
+        <select id="frequency" class="field" aria-label="推送频率">${freqOptions}</select>
+      </div>
+      <div class="section">
+        <h2>暂停订阅</h2>
+        <p class="sub" style="font-size:12px;margin:0 0 10px">
+          选一个日期，在那之前不收邮件；暂停期间的通知会随恢复后的第一封摘要补上。
+        </p>
+        <input type="date" id="pausedUntil" class="field" aria-label="暂停至"
+               value="${esc(user.prefs.pausedUntil || "")}">
+        <button type="button" id="clearPause" class="btn-secondary" style="margin-top:10px">清除暂停</button>
+      </div>
       <div id="msg" role="status" aria-live="polite"></div>
+      <div class="tip" style="margin-top:16px">
+        <a href="/archive">通知归档</a> · <a href="/feed.xml">RSS 订阅</a> ·
+        <a href="/calendar.ics">加入日历</a>
+      </div>
       <div class="danger">
         <h2>注销账户</h2>
         <p>删除账号、订阅记录与栏目设置，之后不再收到任何邮件。此操作不可恢复。</p>

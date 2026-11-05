@@ -81,6 +81,12 @@
 - **单一事实源配置**：域名只填一次，所有 URL 与发件人自动派生；`.env` 一处修改可同步到云端两端。
 - **自动部署**：Workers Builds 连接 GitHub 后，push 到 `main` 即构建部署 Worker；Python 端由 Actions 定时运行。
 - **自定义域名**：`[[routes]] custom_domain = true` 绑定，同时保留 `workers.dev` 备用入口。
+- **内容变更检测**：列表页指纹 + 每日一次详情抽检；官网改标题、补正文、加附件、延长截止都会以「【更新】」重推。
+- **双重确认订阅**：首次登录后再点一封确认邮件才进入名单，随后发欢迎邮件并记录同意时间。
+- **频率与暂停**：控制台可选即时 / 日报 / 周报，或暂停到指定日期；暂停期间的通知随恢复后的摘要补上。
+- **归档 · RSS · 日历**：`/archive`、`/feed.xml`、`/calendar.ics` 无需注册即可查看全部通知与报名截止日。
+- **退订挽留与统计**：退订页收集原因并提供「改成周报」；`/api/stats` 输出统计。
+- **失败可见**：发信失败不写已读状态、下轮重试；Actions 失败告警 + 成功心跳；Resend webhook 验签后自动清理退信 / 投诉地址。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -95,7 +101,7 @@
 | 订阅中心 | Cloudflare Workers · TypeScript · esbuild · Wrangler |
 | 状态存储 | Workers KV（账号 / 订阅 / 会话） · Durable Objects（限流） |
 | 部署 | Cloudflare Workers Builds · Custom Domains |
-| 质量保障 | `yds.selftest`（27 项） · Worker e2e（106 项） · `tsc --noEmit` · Wrangler dry-run |
+| 质量保障 | `yds.selftest`（55 项，FAIL 返回非零） · Worker e2e（142 项） · `tsc --noEmit` · Wrangler dry-run |
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -151,7 +157,13 @@ flowchart LR
 | `/dashboard` | GET | 控制台：栏目偏好、注销、删除账号 |
 | `/api/prefs` · `/api/logout` · `/api/delete-account` | POST | 状态变更接口（CSRF 校验） |
 | `/unsubscribe` | GET / POST | 按邮箱签名的退订确认与执行 |
-| `/api/list` | GET | 订阅名单与偏好，需 `Authorization: Bearer <SUBSCRIBE_API_TOKEN>`，带限流 |
+| `/api/list` | GET | 订阅名单与偏好（含频率 / 暂停），需 `Authorization: Bearer <SUBSCRIBE_API_TOKEN>`，带限流 |
+| `/confirm?c=` | GET | 确认订阅（一次性链接），完成后发欢迎邮件 |
+| `/api/confirm/resend` | POST | 重发确认邮件（每邮箱每小时 3 次） |
+| `/archive` · `/feed.xml` · `/calendar.ics` | GET | 通知归档页 / RSS 2.0 / iCalendar 日历订阅 |
+| `/api/notices` | POST | Python 同步通知元数据（公开字段），Bearer 鉴权 |
+| `/api/stats` | GET | 退订原因与降频统计，Bearer 鉴权 |
+| `/api/webhooks/resend` | POST | Resend webhook（Svix 验签），自动清理退信 / 投诉地址 |
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -268,13 +280,19 @@ GitHub 侧需要 `gh auth login --web --scopes "repo,workflow"`；也可在两�
 
 | 位置 | 内容 |
 |---|---|
-| Cloudflare → Secrets | `UNSUB_SECRET` · `SUBSCRIBE_API_TOKEN` · `RESEND_API_KEY`（可选 `UNSUB_SECRET_PREVIOUS`） |
-| Cloudflare → Variables | `CUSTOM_DOMAIN` 或 `WORKERS_DEV_URL` · `MAIL_FROM_ADDRESS` · `MAIL_TO`（以及可选显示名 / 限流参数） |
+| Cloudflare → Secrets | `UNSUB_SECRET` · `SUBSCRIBE_API_TOKEN` · `RESEND_API_KEY`（可选 `UNSUB_SECRET_PREVIOUS`、`RESEND_WEBHOOK_SECRET`） |
+| Cloudflare → Variables | `CUSTOM_DOMAIN` 或 `WORKERS_DEV_URL` · `MAIL_FROM_ADDRESS` · `MAIL_TO`（可选显示名、限流参数、`DOUBLE_OPT_IN`） |
 | Cloudflare → Bindings | `SUBS`（KV） · `RATE`（Durable Object，已配好） |
-| GitHub → Actions Secrets | 与 Cloudflare 同名同值的密钥、域名、发信配置 |
+| GitHub → Actions Secrets | 与 Cloudflare 同名同值的密钥、域名、发信配置；可选 `PUBLISH_NOTICES`、`HEARTBEAT_URL`、`ALERT_WEBHOOK_URL` |
 
 **三处一致性**：`UNSUB_SECRET` 两端相同；`SUBSCRIBE_API_TOKEN` 两端同名同值；
-`CUSTOM_DOMAIN` 两端同值（`UNSUB_URL` / `SUBSCRIBE_API_URL` 自动派生，无需填写）。
+`CUSTOM_DOMAIN` 两端同值（`UNSUB_URL` / `SUBSCRIBE_API_URL` / `NOTICES_API_URL` 自动派生，无需填写）。
+
+本轮新增的可选配置：`RESEND_WEBHOOK_SECRET`（Resend → Webhooks 的签名密钥，端点填
+`https://<站点>/api/webhooks/resend`，勾选 `email.bounced` / `email.complained` / `suppression.added`）、
+`DOUBLE_OPT_IN`（默认开启，填 `false` 可回到「点登录链接即订阅」）、
+`PUBLISH_NOTICES`（归档同步开关）、`HEARTBEAT_URL`（外部 dead-man switch 的 ping 地址）与
+`ALERT_WEBHOOK_URL`（失败时接收 POST JSON 的告警地址）。空值会被同步脚本跳过。
 
 ### 4. 推送与验证
 
@@ -306,6 +324,7 @@ git push origin main
 | `PUBLIC_BASE_URL` | 显式值 → `https://<CUSTOM_DOMAIN>` → `<WORKERS_DEV_URL>` |
 | `UNSUB_URL` | `<生效地址>/unsubscribe` |
 | `SUBSCRIBE_API_URL` | `<生效地址>/api/list` |
+| `NOTICES_API_URL` | `<生效地址>/api/notices` |
 | `MAIL_FROM` | `MAIL_FROM_NAME <MAIL_FROM_ADDRESS>` |
 
 - **域名只填一处**：改 `CUSTOM_DOMAIN` 后，登录链接、邮件里的退订链接、名单 API 地址全部自动跟随。
@@ -314,6 +333,8 @@ git push origin main
 - `.env.example` 每项标注去处：`[CF-V]` / `[CF-S]` / `[GH]` / `[构建]` / `[本地]`。
 - `npm run sync-config` 把域名与 KV id 写进 `wrangler.toml`；
   `bash scripts/ops.sh secrets` 把运行时配置同步到 Cloudflare 与 GitHub。
+- `config.yaml` 新增 `digest_hour`（日报 / 周报发送时刻）、`full_check_limit`（每日详情抽检条数）、
+  `notices_limit`（归档条数上限）；`data/pending.json` 是摘要待发池，与 `seen.json` 一起由 Actions 回写。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -344,21 +365,25 @@ yds-notifier/
 │   ├── src/security.ts           # 签名 / CSRF / CSP / 校验
 │   ├── src/auth.ts · rate.ts · mailer.ts
 │   ├── src/ui/                   # 界面层：styles / scripts / layout / pages
-│   ├── src/handlers/             # 后端逻辑层：login / dashboard / unsubscribe / api
+│   ├── src/handlers/             # login / dashboard / unsubscribe / api / feed / webhook
 │   ├── scripts/sync-config.mjs   # .env → wrangler.toml（自定义域名 + KV id）
 │   ├── wrangler.toml             # main = dist/index.js，AUTO-CONFIG 区块
 │   ├── .dev.vars.example         # 本地调试配置模板
 │   └── tests/worker.e2e.mjs      # 端到端测试
-├── data/seen.json                # 已推送记录（Actions 自动提交回仓库）
+├── data/
+│   ├── seen.json                 # 已推送记录 + 变更指纹（Actions 自动回写）
+│   └── pending.json              # 日报 / 周报待发池
 ├── .github/workflows/
-│   ├── notify.yml                # 定时抓取发信 + 状态回写
+│   ├── notify.yml                # 定时抓取发信 + 状态回写 + 告警 / 心跳
 │   └── worker-ci.yml             # 类型检查 / 测试 / 构建
 └── yds/
     ├── config.py                 # 统一读取 .env 与域名派生
     ├── models.py · fetch.py · sources.py · state.py
     ├── mailer.py · senders.py · recipients.py · unsub.py
+    ├── dispatch.py               # 即时 / 日报 / 周报 / 暂停的发信编排
+    ├── publish.py                # 通知元数据 → Worker（归档 / RSS / 日历）
     ├── main.py · __main__.py     # 命令行入口
-    └── selftest.py               # 离线自测：配置 / 签名 / 收件人
+    └── selftest.py               # 离线自测：配置 / 签名 / 变更检测 / 摘要池
 ```
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
@@ -374,10 +399,14 @@ yds-notifier/
 
 批量通知按「报名参赛 / 评审与名单 / 决赛与收官 / 赛事动态」分组，HTML + 纯文本双格式，
 按时段变化问候；底部提供退订按钮与 RFC 8058 一键退订头。
-收件人可在控制台勾选栏目，推送时按偏好过滤。
+收件人可在控制台勾选栏目、切换即时 / 日报 / 周报或暂停；官网对同一篇文章做「更正 / 补充 / 延期」时，
+邮件主题与卡片会带「【更新】」标记重新推送。首次订阅需经过登录邮件 + 确认邮件两次点击，确认后才发欢迎信。
 
 | 项 | 实际情况 |
 |---|---|
+| 公开内容 | `/archive` 归档页、`/feed.xml` RSS、`/calendar.ics` 日历订阅，均无需登录 |
+| 日历 | 从标题 / 摘要抽取报名截止与赛程日期，事件 UID 稳定，延期时原地更新 |
+| 名单卫生 | Resend webhook 验签后自动移除硬退信与投诉地址，并写入抑制标记 |
 | 检查间隔 | 10 分钟（cron `*/10 * * * *`） |
 | 实际延迟 | 通常 10 分钟内，GitHub 高峰期可能多几分钟 |
 | 单次成本 | 无新公告时只请求列表页，不抓详情页 |
@@ -466,6 +495,12 @@ yds-notifier/
 - [x] 按邮箱签名退订与 RFC 8058 一键退订
 - [x] 自定义域名与 Workers Builds 自动部署
 - [x] 完整安全评审与修复
+- [x] 内容变更检测与「【更新】」重推
+- [x] 归档 / RSS / 日历订阅
+- [x] 推送频率与暂停
+- [x] 双重确认与欢迎邮件
+- [x] 失败告警、心跳与 Resend webhook 自动清理
+- [x] 退订原因统计（`/api/stats`，可视化界面待做）
 - [ ] DMARC 策略与送达率监控
 - [ ] 更多官方渠道与关键词配置化
 - [ ] 订阅增长与退订原因的可视化统计

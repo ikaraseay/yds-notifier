@@ -17,6 +17,7 @@ UNSUB_SECRET="replace-with-32-byte-random-hex"
 UNSUB_SECRET_PREVIOUS=""
 RESEND_API_KEY="re_xxxxxxxxxxxxxxxxxxxxxxxx"
 SUBSCRIBE_API_TOKEN="replace-with-another-32-byte-random-hex"
+RESEND_WEBHOOK_SECRET=""
 
 # --- Variables ---
 SITE_NAME="研电赛通知订阅"
@@ -27,3 +28,4 @@ UNSUB_TTL_DAYS="180"
 MAX_PER_IP_HOUR="10"
 MAX_CONFIRM_PER_DAY="200"
 LIST_RATE_PER_HOUR="60"
+DOUBLE_OPT_IN="true"
