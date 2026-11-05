@@ -196,9 +196,23 @@ def main(argv: List[str] | None = None) -> int:
             log.info("%s | %-8s | %-14s | %s%s", n.date_text, n.category, n.source, flag, n.title)
         return 0
 
+    # --- 归档 / RSS / 日历的数据同步 -----------------------------------------
+    # 与「本轮有没有新公告」无关：首次升级要回填历史，官网补充 / 延期也要更新归档。
+    # 用内容指纹限流，只有真的变了才写 Worker KV；失败只告警，绝不阻断邮件主流程。
+    archive_changed = False
+    if not args.dry_run and not args.preview:
+        all_items = {n.uid: n for n in meta}
+        for n in notices_from_state(state):
+            all_items.setdefault(n.uid, n)
+        payload = build_payload(list(all_items.values()), int(cfg.get("notices_limit", 200)))
+        fp = payload_fingerprint(payload)
+        if fp != state.published_hash and publish_notices(payload):
+            state.set_published_hash(fp)
+            archive_changed = True
+
     if not merged and not args.preview:
-        # 没有新内容：只在抽检刷新过指纹时才落盘，避免每 10 分钟产生一次 git 提交
-        if full_check:
+        # 没有新内容：只在抽检刷新过指纹或归档有更新时才落盘，避免每 10 分钟产生一次 git 提交
+        if full_check or archive_changed:
             state.save()
         else:
             log.info("无新公告，结束（未抓取详情页推送）")
@@ -227,16 +241,6 @@ def main(argv: List[str] | None = None) -> int:
     log.info("本轮待推 %s 条（新增 %s / 更新 %s）", len(fresh), len(fresh) - len(changed_uids), len(changed_uids))
     for n in fresh:
         log.info("  %s %s | %s", "【更新】" if n.change_kind == "changed" else "+", n.date_text, n.title)
-
-    # --- 归档 / RSS / 日历的数据同步（附加能力，失败不阻断发信） -------------
-    if not args.dry_run:
-        all_items = {n.uid: n for n in meta}
-        for n in notices_from_state(state):
-            all_items.setdefault(n.uid, n)
-        payload = build_payload(list(all_items.values()), int(cfg.get("notices_limit", 200)))
-        fp = payload_fingerprint(payload)
-        if fp != state.published_hash and publish_notices(payload):
-            state.set_published_hash(fp)
 
     if args.dry_run:
         sample = build_unsubscribe_url(

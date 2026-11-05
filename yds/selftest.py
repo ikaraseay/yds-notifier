@@ -179,6 +179,16 @@ def main() -> int:
     check("HTML 带更新角标", ">更新</span>" in build_html([upd]))
     check("头部文案区分更新", "有更新" in build_html([upd]))
 
+    print("\n[10] 归档同步不会被「无新公告」提前返回跳过")
+    # 回归守卫：同步曾写在 `if not fresh: return 0` 之后，导致没有新公告时
+    # 归档/RSS/日历永远为空。这里只做静态顺序校验，不联网、不发信。
+    src = (Path(__file__).with_name("main.py")).read_text(encoding="utf-8")
+    sync_at = src.find("publish_notices(payload)")
+    early_at = src.find("if not merged and not args.preview")
+    check("主流程中存在归档同步调用", sync_at > 0)
+    check("同步位于无新公告提前返回之前", 0 < sync_at < early_at)
+    check("同步结果会写入状态指纹", "archive_changed = True" in src)
+
     print(f"\n结果：{PASS} 项通过，{FAIL} 项失败")
     return 1 if FAIL else 0
 
