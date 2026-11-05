@@ -40,12 +40,14 @@ cp .env.example .env      # 填真实值；.env 已被 .gitignore 忽略
 | `MAIL_FROM` | `MAIL_FROM_NAME <MAIL_FROM_ADDRESS>` |
 
 - **自定义域名**只需填 `CUSTOM_DOMAIN="notice.example.com"`，全站链接自动跟随；`npm run sync-config` 会把它写成 `[[routes]] custom_domain = true`。首次部署可先留空、只用 `WORKERS_DEV_URL`，DNS 生效后再补上。
-- 跨平台共享密钥**同名同值**：`UNSUB_SECRET`、`SUBSCRIBE_API_TOKEN` 在 Cloudflare 与 GitHub 各填一次，名字一样。
+- **发件域名与站点域名相互独立**：本项目站点在 `notice.example.com`（子域），发件人是 `notice@example.com`（根域）。`MAIL_FROM_ADDRESS` 只要求属于 Resend 已验证域名，不必等于 `CUSTOM_DOMAIN`。详见 [域名发信配置指南](docs/域名发信配置指南.md)。
+- 跨平台共享密钥**同名同值**：`UNSUB_SECRET`、`SUBSCRIBE_API_TOKEN` 在 Cloudflare 与 GitHub 各填一次，名字一样；改完 `.env` 可跑 `python3 scripts/sync-secrets.py` 一次同步两端。
 - **`.env.example`** 每项都标注去处（`[CF-V]` 明文变量 / `[CF-S]` 密钥 / `[GH]` GitHub Secret / `[构建]` Build variable / `[本地]`）。
 - **`config.yaml`** 只留业务规则（数据源、白名单、去重、主题前缀），可安全入库。
 - 优先级：**进程环境变量（CI / Cloudflare 注入）> `.env` > 内置默认值**。
 
-> Cloudflare **不会读取仓库里的 `.env`**：运行时配置填 Dashboard → Variables and Secrets；
+> Cloudflare **不会读取仓库里的 `.env`**：运行时配置填 Dashboard → Variables and Secrets，
+> 或用 `python3 scripts/sync-secrets.py` 从 `.env` 批量同步到 Cloudflare 与 GitHub；
 > `.env` 里的 `CUSTOM_DOMAIN` / `KV_SUBS_ID` 由 `sync-config` 在构建期写进 `wrangler.toml`；
 > 本地 `wrangler dev` 读 `worker/.dev.vars`（模板 `worker/.dev.vars.example`）。
 
@@ -129,6 +131,7 @@ yds-notifier/
 ├── .gitignore
 ├── config.yaml                   # 纯业务规则：数据源 / 去重 / 主题前缀
 ├── requirements.txt
+├── scripts/sync-secrets.py        # .env → Cloudflare / GitHub Secrets 批量同步
 ├── docs/
 │   ├── Cloudflare自动部署指南.md   # Git 集成 + 自定义域名 + 环境变量清单
 │   ├── 安全评审报告.md             # 本次评审发现与修复
@@ -187,7 +190,8 @@ cd worker && npm ci && npm run check && npm run dev
 - **改邮件样式**：`yds/mailer.py` 的 `build_html`
 - **改 Worker 界面**：`worker/src/ui/`；**改后端逻辑**：`worker/src/handlers/`
 - **改栏目**：`worker/src/auth.ts` 的 `CATEGORIES` 与 `yds/recipients.py` 的 `CATEGORY_TO_KEY` 必须同步
-- **换域名**：只改 `.env` 的 `CUSTOM_DOMAIN`，跑 `npm run sync-config`，同步更新 Cloudflare 与 GitHub 的同名变量
+- **换域名**：只改 `.env` 的 `CUSTOM_DOMAIN`，跑 `npm run sync-config`（写 routes）与 `python3 scripts/sync-secrets.py`（同步两端变量）
+- **换发件地址**：改 `.env` 的 `MAIL_FROM_ADDRESS`，再跑 `python3 scripts/sync-secrets.py`；Resend 侧必须先验证该地址所属域名
 
 ## 常见问题
 
