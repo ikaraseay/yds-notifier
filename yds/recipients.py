@@ -94,20 +94,34 @@ def _parse_prefs(raw) -> Optional[FrozenSet[str]]:
     return frozenset(k for k in ALL_CATEGORIES if raw.get(k) is True)
 
 
-def fetch_subscribers(api_url: str, token: str, timeout: int = 20) -> List[Recipient]:
-    """从 Worker 拉取已登录的订阅者及其栏目偏好。"""
+def fetch_subscribers(
+    api_url: str, token: str, timeout: int = 20, fallback_url: str = ""
+) -> List[Recipient]:
+    """从 Worker 拉取已登录的订阅者及其栏目偏好。
+
+    自定义域可能被 WAF 托管质询拦截（机房 IP），失败时自动试 workers.dev 或反向兜底。
+    网页服务不可用时降级为只用 MAIL_TO，不阻断核心推送。
+    """
     if not api_url or not token:
         return []
-    try:
-        resp = requests.get(
-            api_url,
-            headers={"Authorization": f"Bearer {token}"},
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as exc:  # noqa: BLE001 - 网页服务不可用不应阻断推送
-        log.warning("拉取订阅名单失败，仅使用 MAIL_TO：%s", exc)
+    urls = [api_url]
+    if fallback_url and fallback_url not in urls:
+        urls.append(fallback_url)
+    data = None
+    for endpoint in urls:
+        try:
+            resp = requests.get(
+                endpoint,
+                headers={"Authorization": f"Bearer {token}"},
+                timeout=timeout,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            break
+        except Exception as exc:  # noqa: BLE001 - 网页服务不可用不应阻断推送
+            log.warning("拉取订阅名单失败（%s）：%s", endpoint, str(exc)[:120])
+    if data is None:
+        log.warning("订阅名单全部入口不可用，仅使用 MAIL_TO")
         return []
 
     if not isinstance(data, dict):
@@ -148,7 +162,7 @@ def fetch_subscribers(api_url: str, token: str, timeout: int = 20) -> List[Recip
 
 
 def resolve_recipients(
-    static_raw: str, api_url: str = "", token: str = ""
+    static_raw: str, api_url: str = "", token: str = "", fallback_url: str = ""
 ) -> List[Recipient]:
     """合并静态收件人与网页订阅者，去重后保持稳定顺序。
 
@@ -163,7 +177,7 @@ def resolve_recipients(
         seen.add(e)
         ordered.append(Recipient(email=e, categories=None))
 
-    for r in fetch_subscribers(api_url, token):
+    for r in fetch_subscribers(api_url, token, fallback_url=fallback_url):
         if r.email in seen:
             continue
         seen.add(r.email)

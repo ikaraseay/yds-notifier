@@ -85,22 +85,22 @@ def publish_notices(payload: dict, timeout: int = 20) -> bool:
     if not url or not token:
         log.warning("未配置 NOTICES_API_URL / SUBSCRIBE_API_TOKEN，跳过归档同步")
         return False
-    try:
-        resp = requests.post(
-            url,
-            data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
-            headers={
-                "Authorization": f"Bearer {token}",
-                "Content-Type": "application/json",
-            },
-            timeout=timeout,
-        )
-        if resp.status_code in (200, 201, 202, 204):
-            log.info("归档数据已同步：%s 条", len(payload.get("notices", [])))
-            return True
-        log.warning("归档同步失败：HTTP %s %s", resp.status_code, resp.text[:160])
-    except requests.RequestException as exc:
-        log.warning("归档同步异常（不影响发信）：%s", exc)
+    body = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
+    urls = settings.api_candidates(url, "/api/notices")
+    last = "无可用入口"
+    for endpoint in urls:
+        try:
+            resp = requests.post(endpoint, data=body, headers=headers, timeout=timeout)
+            if resp.status_code in (200, 201, 202, 204):
+                log.info("归档数据已同步（%s）：%s 条", endpoint, len(payload.get("notices", [])))
+                return True
+            last = f"HTTP {resp.status_code} {resp.text[:100]}"
+        except requests.RequestException as exc:
+            last = str(exc)[:120]
+        log.warning("归档同步入口 %s 失败：%s，尝试下一个", endpoint, last)
+    # 附加能力：同步失败只告警，绝不阻断邮件主流程
+    log.warning("归档同步全部入口失败（不影响发信）：%s", last)
     return False
 
 

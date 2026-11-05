@@ -110,7 +110,13 @@ def main(argv: List[str] | None = None) -> int:
 
     sender = build_client(cfg.get("mail") or {})
     static_to = args.to or settings.mail_to
-    recipients = resolve_recipients(static_to, settings.subscribe_api_url, settings.subscribe_api_token)
+    fallback_list_url = (
+        f"{settings.public_base_url.rstrip('/')}/api/list" if settings.public_base_url else ""
+    )
+    recipients = resolve_recipients(
+        static_to, settings.subscribe_api_url, settings.subscribe_api_token,
+        fallback_url=fallback_list_url,
+    )
     needs_send = not (args.check or args.preview)
     if needs_send:
         if not recipients:

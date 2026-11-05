@@ -62,6 +62,19 @@ def derive_base_url(
     return base.rstrip("/")
 
 
+def derive_internal_base(workers_dev_url: str, public_base_url: str) -> str:
+    """机器对机器调用（/api/list、/api/notices）的基地址。
+
+    自定义域挂在用户 zone 下，可能受 WAF / Bot Fight 的托管质询影响 ——
+    GitHub Actions 的机房 IP 曾让 POST 返回 403 "Just a moment..."。
+    workers.dev 不经过该 zone 的规则，优先用它；没配时回退对外地址。
+    """
+    dev = (workers_dev_url or "").strip().rstrip("/")
+    if dev.startswith("https://") and ".workers.dev" in dev:
+        return dev
+    return (public_base_url or "").rstrip("/")
+
+
 @dataclass(frozen=True)
 class Settings:
     # 站点 / 域名
@@ -69,6 +82,7 @@ class Settings:
     custom_domain: str
     workers_dev_url: str
     public_base_url: str
+    internal_base_url: str
     repo_url: str
 
     # 发信
@@ -100,12 +114,14 @@ class Settings:
         custom = _clean_host(_s("CUSTOM_DOMAIN"))
         dev_url = _s("WORKERS_DEV_URL")
         base = derive_base_url(_s("PUBLIC_BASE_URL"), custom, dev_url)
+        internal = derive_internal_base(dev_url, base)
 
         return cls(
             site_name=_s("SITE_NAME", "研电赛通知订阅"),
             custom_domain=custom,
             workers_dev_url=dev_url,
             public_base_url=base,
+            internal_base_url=internal,
             repo_url=_s("REPO_URL"),
             mail_provider=_s("MAIL_PROVIDER", "resend").lower(),
             mail_from_address=from_addr,
@@ -119,14 +135,28 @@ class Settings:
             smtp_user=_s("SMTP_USER"),
             smtp_password=_s("SMTP_PASSWORD"),
             # 显式旧变量优先，否则从域名派生
+            # 对外链接必须用自定义域；机器接口优先 workers.dev 绕开 zone WAF
             unsub_url=_s("UNSUB_URL") or (f"{base}/unsubscribe" if base else ""),
-            subscribe_api_url=_s("SUBSCRIBE_API_URL") or (f"{base}/api/list" if base else ""),
-            notices_api_url=_s("NOTICES_API_URL") or (f"{base}/api/notices" if base else ""),
+            subscribe_api_url=_s("SUBSCRIBE_API_URL") or (f"{internal}/api/list" if internal else ""),
+            notices_api_url=_s("NOTICES_API_URL") or (f"{internal}/api/notices" if internal else ""),
             publish_notices=_s("PUBLISH_NOTICES", "true").lower() not in ("0", "false", "no"),
             unsub_secret=_s("UNSUB_SECRET"),
             unsub_ttl_days=max(1, _i("UNSUB_TTL_DAYS", 180)),
             subscribe_api_token=_s("SUBSCRIBE_API_TOKEN"),
         )
+
+    def api_candidates(self, url: str, path: str) -> list[str]:
+        """把机器接口地址扩展成 [主入口, 自定义域入口]，用于失败时自动回退。"""
+        primary = (url or "").rstrip("/")
+        bases: list[str] = []
+        if primary.endswith(path):
+            bases.append(primary[: -len(path)].rstrip("/"))
+        elif primary:
+            bases.append(primary)
+        pub = (self.public_base_url or "").rstrip("/")
+        if pub and pub not in bases:
+            bases.append(pub)
+        return [b + path for b in bases if b]
 
     def mail_preflight(self) -> str:
         """返回空串表示发信配置可用，否则返回具体缺失项。"""
