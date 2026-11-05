@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
-      contents: write   # 仅用于把 data/seen.json 提交回仓库去重
+      contents: write   # 仅用于把 data/seen.json、data/pending.json 提交回仓库
     steps:
       - name: 检出仓库
         uses: actions/checkout@v4
@@ -42,12 +42,11 @@ jobs:
       - name: 安装依赖
         run: pip install -r requirements.txt
 
-      # 不联网的契约自测：退订签名格式、收件人校验、配置读取
-      - name: 配置与签名自测
+      # 不联网的契约自测：退订签名格式、收件人校验、配置读取、变更检测
+      - name: 配置与契约自测
         run: python -m yds.selftest
 
       # 入口自检：防止 __main__.py 只 import 不调用 main() 导致「假成功」
-      # （静默退出 0，抓取/发信/写状态全部没执行，且日志里毫无痕迹）
       - name: 入口自检
         run: |
           python -m yds --help | grep -q "usage: yds" || {
@@ -58,8 +57,6 @@ jobs:
       # 完整清单见 .env.example 的「CI」标注项。
       - name: 抓取通知并发送邮件
         env:
-          # 域名单一事实源：一般只填 CUSTOM_DOMAIN（与 Cloudflare 同名同值），
-          # UNSUB_URL / SUBSCRIBE_API_URL 会自动派生；WORKERS_DEV_URL 是未绑域名时的兜底。
           CUSTOM_DOMAIN: ${{ secrets.CUSTOM_DOMAIN }}
           WORKERS_DEV_URL: ${{ secrets.WORKERS_DEV_URL }}
           PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
@@ -75,12 +72,14 @@ jobs:
           SMTP_SECURITY: ${{ secrets.SMTP_SECURITY || 'ssl' }}
           SMTP_USER: ${{ secrets.SMTP_USER }}
           SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
-          # 下面两个 URL 是「可选覆盖」：旧部署若已单独填过会优先生效，新部署不用填
           UNSUB_URL: ${{ secrets.UNSUB_URL }}
           SUBSCRIBE_API_URL: ${{ secrets.SUBSCRIBE_API_URL }}
           UNSUB_SECRET: ${{ secrets.UNSUB_SECRET }}
           UNSUB_TTL_DAYS: ${{ secrets.UNSUB_TTL_DAYS || '180' }}
           SUBSCRIBE_API_TOKEN: ${{ secrets.SUBSCRIBE_API_TOKEN }}
+          # 归档 / RSS / 日历的数据同步；NOTICES_API_URL 不填时自动派生
+          NOTICES_API_URL: ${{ secrets.NOTICES_API_URL }}
+          PUBLISH_NOTICES: ${{ secrets.PUBLISH_NOTICES || 'true' }}
           REPO_URL: ${{ github.server_url }}/${{ github.repository }}
           TZ: Asia/Shanghai
         run: |
@@ -91,25 +90,65 @@ jobs:
             python -m yds
           fi
 
-      # 把去重状态提交回仓库，下次运行才知道发过什么
-      - name: 保存去重状态
+      # 成功心跳：配合外部 dead-man switch（Healthchecks / UptimeRobot / Better Stack），
+      # 「该来没来」就会告警，能同时覆盖 Actions 被 60 天规则禁用、抓取静默停摆等情况。
+      - name: 成功心跳
+        if: success() && github.event.inputs.mode != 'check'
+        env:
+          HEARTBEAT_URL: ${{ secrets.HEARTBEAT_URL }}
+        run: |
+          if [ -z "$HEARTBEAT_URL" ]; then
+            echo "未配置 HEARTBEAT_URL，跳过心跳（建议在外部拨测服务创建）"
+            exit 0
+          fi
+          curl -fsS --max-time 15 "$HEARTBEAT_URL" >/dev/null && echo "心跳已上报"
+
+      # 把去重状态与摘要池提交回仓库，下次运行才知道发过什么、还有哪些摘要待发
+      - name: 保存状态
         if: always() && github.event.inputs.mode != 'check'
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # 本轮无新公告 / 抓取失败时 State 不会写文件，此时不应让 workflow 失败
-          if [ ! -f data/seen.json ]; then
-            echo "本轮未生成状态文件，跳过提交"
-            exit 0
-          fi
-          git add -- data/seen.json
-          if git diff --cached --quiet -- data/seen.json; then
+          # 本轮无变化时 state 不会写文件，此时不应让 workflow 失败
+          git add -- data/seen.json data/pending.json 2>/dev/null || true
+          if git diff --cached --quiet; then
             echo "状态无变化，跳过提交"
             exit 0
           fi
-          git commit -m "chore: 更新已推送通知记录 [skip ci]"
+          git commit -m "chore: 更新去重状态与摘要池 [skip ci]"
+          pushed=0
           for i in 1 2 3; do
-            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || true
-            if git push origin "HEAD:${GITHUB_REF_NAME}"; then break; fi
+            git pull --rebase --autostash origin "${GITHUB_REF_NAME}" || {
+              echo "::error::rebase 失败，状态可能冲突"; exit 1;
+            }
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then pushed=1; break; fi
             echo "推送失败，重试第 $i 次"; sleep 5
           done
+          if [ "$pushed" -ne 1 ]; then
+            echo "::error::状态回写失败（3 次重试耗尽），下一轮会重复推送，请人工检查"
+            exit 1
+          fi
+
+  # 任何一步失败都立刻推送告警；未配置 webhook 时显式失败，避免「静默失败」
+  alert:
+    needs: notify
+    if: failure() && needs.notify.result == 'failure'
+    runs-on: ubuntu-latest
+    permissions: {}
+    steps:
+      - name: 推送失败告警
+        env:
+          WEBHOOK: ${{ secrets.ALERT_WEBHOOK_URL }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$WEBHOOK" ]; then
+            echo "::error::通知推送失败，且未配置 ALERT_WEBHOOK_URL：${RUN_URL}"
+            exit 1
+          fi
+          payload=$(jq -n --arg url "$RUN_URL" \
+            '{text: "研电赛通知推送失败，请检查运行日志", run: $url}')
+          curl -fsS --max-time 15 -X POST -H 'Content-Type: application/json' \
+            -d "$payload" "$WEBHOOK" >/dev/null || {
+              echo "::error::告警发送失败，请检查 ALERT_WEBHOOK_URL"; exit 1;
+            }
+          echo "已推送失败告警"

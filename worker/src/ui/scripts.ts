@@ -47,12 +47,14 @@ export const LOGIN_SCRIPT = `
 })();
 `;
 
-/** 控制台：勾选即存（乐观更新），失败回滚并提示 */
+/** 控制台：栏目 / 频率 / 暂停即时保存，确认邮件重发，退出与注销 */
 export const PREFS_SCRIPT = `
 (function () {
   var form = document.getElementById('opts');
   var msg = document.getElementById('msg');
   if (!form) return;
+  var freq = document.getElementById('frequency');
+  var pause = document.getElementById('pausedUntil');
 
   function feedback(kind, text) {
     msg.className = '';
@@ -68,6 +70,8 @@ export const PREFS_SCRIPT = `
       var label = el.closest('.opt');
       if (label) label.classList.toggle('is-on', el.checked);
     });
+    if (freq) out.frequency = freq.value;
+    if (pause) out.pausedUntil = pause.value || '';
     return out;
   }
   function save() {
@@ -85,6 +89,29 @@ export const PREFS_SCRIPT = `
   }
 
   form.addEventListener('change', save);
+  if (freq) freq.addEventListener('change', save);
+  if (pause) pause.addEventListener('change', save);
+
+  var clearPause = document.getElementById('clearPause');
+  if (clearPause && pause) clearPause.addEventListener('click', function () {
+    pause.value = '';
+    save();
+  });
+
+  var resend = document.getElementById('resend');
+  if (resend) resend.addEventListener('click', function () {
+    resend.disabled = true;
+    fetch('/api/confirm/resend', { method: 'POST' })
+      .then(function (r) { return r.json(); })
+      .then(function (d) {
+        feedback(d.ok ? 'ok' : 'err', d.message || (d.ok ? '已重发' : '重发失败'));
+        resend.disabled = false;
+      })
+      .catch(function () {
+        feedback('err', '网络出现问题，请稍后再试');
+        resend.disabled = false;
+      });
+  });
 
   var out = document.getElementById('logout');
   if (out) out.addEventListener('click', function () {

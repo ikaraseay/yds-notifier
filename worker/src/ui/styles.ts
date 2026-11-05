@@ -117,6 +117,12 @@ a{color:var(--memphis-blue);font-weight:700;text-underline-offset:3px}
   background:#fff;color:var(--memphis-coral);box-shadow:4px 4px 0 var(--memphis-coral)}
 .btn-danger:hover{background:#FFF0F0}
 .btn-danger:active{transform:translate(4px,4px);box-shadow:0 0 0 var(--memphis-coral)}
+.section{margin-top:26px;padding-top:18px;border-top:2px dashed #d8cfc0}
+.section h2{font-size:13px;margin:0 0 8px;font-weight:800;letter-spacing:.3px}
+.field{width:100%;box-sizing:border-box;padding:10px 12px;font-size:13px;color:var(--memphis-ink);
+  background:#fff;border:3px solid var(--memphis-ink);border-radius:6px;outline:none}
+.field:focus-visible{outline:3px solid var(--memphis-blue);outline-offset:2px}
+select.field{appearance:none;background-image:none;cursor:pointer}
 @media (prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}
 }

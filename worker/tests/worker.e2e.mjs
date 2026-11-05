@@ -138,14 +138,28 @@ const call = async (path, init = {}, ip) => {
 const post = (path, body, ip) =>
   call(path, { method: "POST", body: JSON.stringify(body) }, ip);
 
-/** 从最近一封发给该邮箱的信里取出魔法链接 */
+/** 从最近一封「登录」邮件里取出魔法链接（确认/欢迎邮件不含该链接） */
 const magicPathOf = (email) => {
-  const m = sent.filter((x) => x.to[0] === email).pop();
-  assert.ok(m, `没有发给 ${email} 的邮件`);
+  const m = sent.filter((x) => x.to[0] === email && String(x.subject).includes("登录")).pop();
+  assert.ok(m, `没有发给 ${email} 的登录邮件`);
   const raw = m.html.match(/href="([^"]*\/login\?n=[^"]*)"/)[1].replace(/&amp;/g, "&");
   const u = new URL(raw);
   return u.pathname + u.search;
 };
+
+/** 从确认订阅邮件里取出 /confirm?c= 链接 */
+const confirmPathOf = (email) => {
+  const m = sent.filter(
+    (x) => x.to[0] === email && String(x.subject).includes("请确认订阅"),
+  ).pop();
+  assert.ok(m, `没有发给 ${email} 的确认订阅邮件`);
+  const raw = m.html.match(/href="([^"]*\/confirm\?c=[^"]*)"/)[1].replace(/&amp;/g, "&");
+  const u = new URL(raw);
+  return u.pathname + u.search;
+};
+
+/** 走完双重确认，返回确认页响应 */
+const confirmOf = (email) => call(confirmPathOf(email));
 
 /** 从 set-cookie 里抠出会话 token */
 const sidOf = (resp) => {
@@ -216,7 +230,18 @@ const check = (name, cond, extra = "") => {
       userRec.prefs.updates === false,
     JSON.stringify(userRec.prefs),
   );
-  check("自动加入订阅列表", (await env.SUBS.get("sub:" + email)) !== null);
+  check("待确认状态不进名单", (await env.SUBS.get("sub:" + email)) === null);
+  check(
+    "已发确认订阅邮件",
+    sent.some((m) => m.to[0] === email && String(m.subject).includes("请确认订阅")),
+  );
+  const cr = await confirmOf(email);
+  check("确认页返回成功", cr.status === 200 && cr.text.includes("订阅"), cr.status);
+  check(
+    "确认后发欢迎邮件",
+    sent.some((m) => m.to[0] === email && String(m.subject).includes("订阅成功")),
+  );
+  check("确认后加入订阅列表", (await env.SUBS.get("sub:" + email)) !== null);
   check("订阅数=1", (await env.SUBS.get("meta:count")) === "1");
   check("已通知站长", sent.some((m) => m.to[0] === "admin@qq.com" && m.subject.includes("新订阅")));
 
@@ -326,6 +351,7 @@ const check = (name, cond, extra = "") => {
   const e3 = "again@qq.com";
   await post("/api/login", { email: e3 }, "9.9.9.5");
   r = await call(magicPathOf(e3));
+  await confirmOf(e3);
   const sid3a = sidOf(r);
   await call("/api/prefs", {
     method: "POST",
@@ -362,6 +388,7 @@ const check = (name, cond, extra = "") => {
   env.RATE = new MockDO();
   await post("/api/login", { email: e3 }, "9.9.9.8");
   r = await call(magicPathOf(e3));
+  await confirmOf(e3);
   const sid3 = sidOf(r);
   const reborn = JSON.parse(await env.SUBS.get("user:" + e3));
   check("偏好回到默认", reborn.prefs.updates === false, JSON.stringify(reborn.prefs));
@@ -416,6 +443,7 @@ const check = (name, cond, extra = "") => {
 
   check("cool@qq.com 未点链接所以没有账号", (await env.SUBS.get("user:" + e2)) === null);
   r = await call(magicPathOf(e2));
+  await confirmOf(e2);
   const e2sid = sidOf(r);
   await call("/api/prefs", {
     method: "POST",
@@ -522,6 +550,145 @@ const check = (name, cond, extra = "") => {
     );
     check(`${label} → ${wantStatus}`, csrf.status === wantStatus, csrf.status);
   }
+
+
+  console.log("\n[25] 通知归档 / RSS / 日历 / 同步接口");
+  const noticePayload = {
+    site: "研电赛通知订阅",
+    baseUrl: "https://yds.workers.dev",
+    notices: [
+      { uid: "n1", title: "关于报名截止的通知", url: "https://cpipc.acge.org.cn/cw/hp/6/1",
+        date: "2026-11-01", category: "报名参赛", source: "研创网",
+        summary: "报名截止 2026年11月25日", deadline: "2026-11-25", changeKind: "new" },
+      { uid: "n2", title: "评审名单公示（更正）", url: "javascript:alert(1)",
+        date: "2026-11-02", category: "评审与名单", source: "研创网",
+        summary: "", deadline: "", changeKind: "changed" },
+    ],
+  };
+  r = await call("/api/notices", { method: "POST", body: JSON.stringify(noticePayload) });
+  check("同步接口无 token 401", r.status === 401, r.status);
+  r = await call("/api/notices", {
+    method: "POST", body: JSON.stringify(noticePayload),
+    headers: { Authorization: "Bearer admin-secret" },
+  });
+  check("同步接口有 token 200", r.status === 200, r.text.slice(0, 120));
+  r = await call("/archive");
+  check("归档页 200 且含标题", r.status === 200 && r.text.includes("关于报名截止的通知"));
+  check("归档页标出更新", r.text.includes("更新"));
+  check("归档页不渲染危险链接", !r.text.includes('href="javascript'));
+  r = await call("/feed.xml");
+  check("RSS 200 且结构正确", r.status === 200 && r.text.includes("<rss"), r.text.slice(0, 120));
+  check("RSS 含两条 item", (r.text.match(/<item>/g) || []).length === 2);
+  r = await call("/calendar.ics");
+  check("日历 200 且含 VCALENDAR", r.status === 200 && r.text.includes("BEGIN:VCALENDAR"));
+  check("日历含截止日", r.text.includes("DTSTART;VALUE=DATE:20261125"));
+  check("日历使用 CRLF", r.text.includes("\r\n"));
+  r = await call("/feed.xml", { method: "POST" });
+  check("RSS 拒绝 POST 405", r.status === 405, r.status);
+
+  console.log("\n[26] 频率与暂停偏好");
+  r = await call("/api/prefs", {
+    method: "POST", body: JSON.stringify({ frequency: "weekly", pausedUntil: "2026-12-01" }),
+    headers: { Cookie: `yds_sid=${e2sid}` },
+  });
+  const pref3 = JSON.parse(r.text);
+  check("频率保存为 weekly", pref3.prefs.frequency === "weekly", JSON.stringify(pref3.prefs));
+  check("暂停日期保存", pref3.prefs.pausedUntil === "2026-12-01");
+  r = await call("/api/list", { headers: { Authorization: "Bearer admin-secret" } });
+  const e2row = JSON.parse(r.text).subscribers.find((s) => s.email === e2);
+  check("名单带 frequency / pausedUntil", !!e2row && e2row.frequency === "weekly" && e2row.pausedUntil === "2026-12-01");
+  r = await call("/api/prefs", {
+    method: "POST", body: JSON.stringify({ frequency: "evil", pausedUntil: "not-a-date" }),
+    headers: { Cookie: `yds_sid=${e2sid}` },
+  });
+  const pref4 = JSON.parse(r.text);
+  check("非法频率回落 instant", pref4.prefs.frequency === "instant");
+  check("非法日期被清空", pref4.prefs.pausedUntil === "");
+
+  console.log("\n[27] 退订原因与「改为低频」");
+  const unsubToken2 = (() => {
+    const exp = Math.floor(Date.now() / 1000) + 3600;
+    const sig = crypto.createHmac("sha256", env.UNSUB_SECRET)
+      .update(`unsub:${e2}:${exp}`).digest("hex").slice(0, 32);
+    return `${exp}.${sig}`;
+  })();
+  const unsubPath2 = `/unsubscribe?email=${encodeURIComponent(e2)}&token=${unsubToken2}`;
+  const formHeaders = { "Content-Type": "application/x-www-form-urlencoded" };
+  r = await call(unsubPath2, {
+    method: "POST", body: new URLSearchParams({ action: "lowfreq" }).toString(),
+    headers: formHeaders,
+  });
+  check("改为周报返回成功", r.status === 200 && r.text.includes("周报"), r.text.slice(0, 120));
+  check("改为周报后仍在名单", (await env.SUBS.get("sub:" + e2)) !== null);
+  const e2user = JSON.parse(await env.SUBS.get("user:" + e2));
+  check("偏好确实改为 weekly", e2user.prefs.frequency === "weekly");
+  r = await call("/api/stats", { headers: { Authorization: "Bearer admin-secret" } });
+  check("统计记录降频次数", JSON.parse(r.text).lowFrequency >= 1, r.text);
+  r = await call(unsubPath2, {
+    method: "POST", body: new URLSearchParams({ action: "unsubscribe", reason: "too_frequent" }).toString(),
+    headers: formHeaders,
+  });
+  check("带原因退订成功", r.status === 200 && r.text.includes("已退订"), r.status);
+  check("已移出名单", (await env.SUBS.get("sub:" + e2)) === null);
+  r = await call("/api/stats", { headers: { Authorization: "Bearer admin-secret" } });
+  const stats = JSON.parse(r.text);
+  check("统计记录退订原因", (stats.reasons["邮件太频繁"] || 0) >= 1, JSON.stringify(stats));
+  r = await call("/api/stats");
+  check("统计接口需鉴权", r.status === 401);
+
+  console.log("\n[28] Resend webhook 验签与自动清理");
+  const whKey = Buffer.from("webhook-test-secret");
+  const whEnv = {
+    ...env,
+    RESEND_WEBHOOK_SECRET: "whsec_" + whKey.toString("base64"),
+    SUBS: new MockKV(), RATE: new MockDO(),
+  };
+  await whEnv.SUBS.put("sub:victim@qq.com", JSON.stringify({
+    email: "victim@qq.com", createdAt: "2026-11-01", status: "confirmed",
+    prefs: { registration: true, review: true, final: true, updates: false, frequency: "instant", pausedUntil: "" },
+  }));
+  await whEnv.SUBS.put("meta:count", "1");
+  const whBody = JSON.stringify({
+    type: "email.bounced", data: { to: ["victim@qq.com"], bounce: { type: "Permanent" } },
+  });
+  const whId = "msg_test_1";
+  const whTs = String(Math.floor(Date.now() / 1000));
+  const whSig = crypto.createHmac("sha256", whKey)
+    .update(`${whId}.${whTs}.${whBody}`).digest("base64");
+  const whReq = (sig) => new Request("https://yds.workers.dev/api/webhooks/resend", {
+    method: "POST",
+    headers: {
+      "svix-id": whId, "svix-timestamp": whTs, "svix-signature": "v1," + sig,
+      "Content-Type": "application/json",
+    },
+    body: whBody,
+  });
+  let wr = await worker.fetch(whReq("invalid-signature"), whEnv);
+  check("验签失败 401", wr.status === 401, wr.status);
+  wr = await worker.fetch(whReq(whSig), whEnv);
+  const wj = await wr.json();
+  check("验签成功并清理", wr.status === 200 && wj.ok === true, `${wr.status} ${JSON.stringify(wj)}`);
+  check("退信地址已移出名单", (await whEnv.SUBS.get("sub:victim@qq.com")) === null);
+  check("写入抑制标记", (await whEnv.SUBS.get("suppressed:victim@qq.com")) !== null);
+  wr = await worker.fetch(whReq(whSig), { ...whEnv, RESEND_WEBHOOK_SECRET: "" });
+  check("未配置密钥时 fail-closed 503", wr.status === 503, wr.status);
+
+  console.log("\n[29] 关闭 double opt-in 的兼容路径");
+  const legacyEnv = { ...env, DOUBLE_OPT_IN: "false", SUBS: new MockKV(), RATE: new MockDO() };
+  let lresp = await worker.fetch(new Request("https://yds.workers.dev/api/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "CF-Connecting-IP": "3.3.3.1" },
+    body: JSON.stringify({ email: "legacy@qq.com" }),
+  }), legacyEnv);
+  check("旧模式登录 200", lresp.status === 200, lresp.status);
+  lresp = await worker.fetch(
+    new Request("https://yds.workers.dev" + magicPathOf("legacy@qq.com")), legacyEnv,
+  );
+  check("旧模式点链接直接进名单", (await legacyEnv.SUBS.get("sub:legacy@qq.com")) !== null);
+
+  console.log("\n[30] 确认链接一次性");
+  r = await call(confirmPathOf(email));
+  check("重复确认返回 400", r.status === 400, r.status);
 
   console.log(`\n结果：${pass} 项通过${process.exitCode ? "，存在失败" : "，全部通过"}`);
 })();

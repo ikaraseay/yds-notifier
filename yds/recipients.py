@@ -17,6 +17,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from datetime import date
 from typing import Dict, FrozenSet, List, Optional
 
 import requests
@@ -46,6 +47,8 @@ class Recipient:
 
     email: str
     categories: Optional[FrozenSet[str]] = None
+    frequency: str = "instant"   # instant | daily | weekly
+    paused_until: str = ""       # YYYY-MM-DD，含当天
 
     def wants(self, category: str) -> bool:
         if self.categories is None:
@@ -53,6 +56,18 @@ class Recipient:
         key = CATEGORY_TO_KEY.get(category)
         # 映射不到的陌生分类：宁可漏发也不误发，避免打扰
         return bool(key) and key in self.categories
+
+    def is_paused(self, today: date | None = None) -> bool:
+        if not self.paused_until:
+            return False
+        return (today or date.today()).isoformat() <= self.paused_until
+
+    @property
+    def digest_key(self) -> str:
+        """即时用户返回空串；暂停中的用户一律进日报池，恢复后随摘要补上。"""
+        if self.is_paused():
+            return "daily"
+        return self.frequency if self.frequency in ("daily", "weekly") else ""
 
 
 def split_recipients(raw: str) -> List[str]:
@@ -107,8 +122,20 @@ def fetch_subscribers(api_url: str, token: str, timeout: int = 20) -> List[Recip
             if not isinstance(item, dict):
                 continue
             email = str(item.get("email", "")).strip().lower()
-            if _valid(email):
-                out.append(Recipient(email=email, categories=_parse_prefs(item.get("prefs"))))
+            if not _valid(email):
+                continue
+            freq = str(item.get("frequency") or "instant").lower()
+            if freq not in ("instant", "daily", "weekly"):
+                freq = "instant"
+            paused = str(item.get("pausedUntil") or "")
+            if paused and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", paused):
+                paused = ""
+            out.append(Recipient(
+                email=email,
+                categories=_parse_prefs(item.get("prefs")),
+                frequency=freq,
+                paused_until=paused,
+            ))
     else:
         # 旧版：只有邮箱列表，按不限栏目处理
         for e in data.get("emails") or []:

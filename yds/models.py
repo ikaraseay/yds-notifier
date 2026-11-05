@@ -32,10 +32,58 @@ class Notice:
     attachments: List[Attachment] = field(default_factory=list)
     uid: str = ""                  # 去重主键：源+id/url
     is_new: bool = False
+    change_kind: str = "new"       # new | changed（官网修订同一篇文章时重推）
+    deadline: str = ""             # 从标题/摘要抽出的报名或赛程截止日（YYYY-MM-DD）
 
     @property
     def date_text(self) -> str:
         return self.published.isoformat() if self.published else "日期未知"
+
+    @property
+    def list_hash(self) -> str:
+        """列表页字段指纹：零额外请求即可发现改标题 / 延期 / 换链接。"""
+        raw = f"{self.title}|{self.date_text}|{self.url}|{self.source_key}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+    @property
+    def detail_hash(self) -> str:
+        """详情页字段指纹：每日抽检一次，用于发现正文 / 附件变化。"""
+        atts = "|".join(f"{a.name}:{a.url}" for a in self.attachments)
+        raw = f"{self.title}|{self.date_text}|{self.summary}|{atts}"
+        return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:16]
+
+    def to_feed_item(self) -> dict:
+        """同步给 Worker 的公开字段（归档 / RSS / 日历共用）。"""
+        return {
+            "uid": self.uid,
+            "title": self.title,
+            "url": self.url,
+            "date": self.date_text,
+            "category": self.category,
+            "source": self.source,
+            "summary": self.summary,
+            "deadline": self.deadline,
+            "attachments": [{"name": a.name, "url": a.url} for a in self.attachments],
+            "changeKind": self.change_kind,
+        }
+
+    @classmethod
+    def from_feed_item(cls, raw: dict) -> "Notice":
+        """从待发摘要池恢复（字段不足时按最小可用信息构造）。"""
+        published = parse_cn_date(str(raw.get("date") or ""))
+        return cls(
+            source=str(raw.get("source") or ""),
+            source_key="",
+            title=str(raw.get("title") or ""),
+            url=str(raw.get("url") or ""),
+            published=published,
+            summary=str(raw.get("summary") or ""),
+            attachments=[Attachment(str(a.get("name") or ""), str(a.get("url") or ""))
+                         for a in (raw.get("attachments") or []) if isinstance(a, dict)],
+            uid=str(raw.get("uid") or ""),
+            change_kind=str(raw.get("changeKind") or "new"),
+            deadline=str(raw.get("deadline") or ""),
+        )
 
     @property
     def category(self) -> str:

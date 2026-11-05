@@ -2,12 +2,17 @@
  * 账号与订阅偏好。
  *
  * 存储结构（KV）：
- *   user:<email>       -> { email, createdAt, lastLogin, prefs: {...} }
+ *   user:<email>       -> { email, createdAt, lastLogin, prefs, status }
  *   session:<hash>     -> { email, exp }      会话（cookie 里只放随机 token，KV 存其哈希）
- *   sub:<email>        -> { email, createdAt } 订阅名单（是否收信的总开关）
+ *   sub:<email>        -> { email, createdAt, status, prefs } 订阅名单（是否收信的总开关）
+ *   confirm:<hash>     -> { email, exp }      待确认订阅的一次性 token
  *   meta:count         -> 订阅人数
+ *   feed:notices       -> 通知元数据（归档 / RSS / 日历）
+ *   stats:unsub        -> 退订原因与降频统计
  *
  * 栏目：与 yds/models.py 的 Notice.category 一一对应，Actions 发信时按用户偏好过滤。
+ * sub:<email> 里冗余了 prefs / status，/api/list 不再需要对每个订阅者 getUser（N+1），
+ * 也避免 sub: 与 user: 两次写入之间的一致性窗口。
  */
 
 export const CATEGORIES = [
@@ -19,11 +24,16 @@ export const CATEGORIES = [
 
 export type CategoryKey = (typeof CATEGORIES)[number]["key"];
 
+export type Frequency = "instant" | "daily" | "weekly";
+export type SubStatus = "pending" | "confirmed";
+
 export interface Prefs {
   registration: boolean;
   review: boolean;
   final: boolean;
   updates: boolean;
+  frequency: Frequency;
+  pausedUntil: string; // YYYY-MM-DD，含当天；空串表示不暂停
 }
 
 export const DEFAULT_PREFS: Prefs = {
@@ -31,6 +41,8 @@ export const DEFAULT_PREFS: Prefs = {
   review: true,
   final: true,
   updates: false, // 动态里多是花絮，默认关掉，避免打扰
+  frequency: "instant",
+  pausedUntil: "",
 };
 
 export interface User {
@@ -38,6 +50,33 @@ export interface User {
   createdAt: string;
   lastLogin: string;
   prefs: Prefs;
+  /** 老账号没有该字段，一律视为已确认，避免升级后集体掉出名单 */
+  status?: SubStatus;
+  confirmedAt?: string;
+  consentSource?: string;
+}
+
+export interface SubRecord {
+  email: string;
+  createdAt: string;
+  status?: SubStatus;
+  prefs?: Prefs;
+  confirmedAt?: string;
+  source?: string;
+}
+
+export function isConfirmed(rec: SubRecord | null): boolean {
+  // 兼容旧格式：没有 status 字段的老订阅记录视为已确认
+  return !!rec && rec.status !== "pending";
+}
+
+export function normalizeFrequency(raw: unknown): Frequency {
+  return raw === "daily" || raw === "weekly" ? raw : "instant";
+}
+
+export function normalizePausedUntil(raw: unknown): string {
+  const s = typeof raw === "string" ? raw.trim() : "";
+  return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
 }
 
 export function normalizePrefs(raw: unknown): Prefs {
@@ -46,6 +85,20 @@ export function normalizePrefs(raw: unknown): Prefs {
   for (const c of CATEGORIES) {
     if (typeof p[c.key] === "boolean") out[c.key] = p[c.key] as boolean;
   }
+  out.frequency = normalizeFrequency(p.frequency);
+  out.pausedUntil = normalizePausedUntil(p.pausedUntil);
+  return out;
+}
+
+/** 解析 /api/prefs 提交的偏好字段，忽略任何未知键与非布尔 / 非法值。 */
+export function prefsFromBody(body: unknown, current: Prefs): Prefs {
+  const raw = (body || {}) as Record<string, unknown>;
+  const out = { ...current };
+  for (const c of CATEGORIES) {
+    if (typeof raw[c.key] === "boolean") out[c.key] = raw[c.key] as boolean;
+  }
+  if (typeof raw.frequency === "string") out.frequency = normalizeFrequency(raw.frequency);
+  if (typeof raw.pausedUntil === "string") out.pausedUntil = normalizePausedUntil(raw.pausedUntil);
   return out;
 }
 
@@ -141,6 +194,90 @@ export async function deleteUser(kv: KVNamespace, email: string): Promise<boolea
   await kv.delete(`user:${email}`);
   await kv.delete(`sub:${email}`);
   return had;
+}
+
+/* ---------------------------- 订阅记录 ---------------------------- */
+
+export async function getSub(kv: KVNamespace, email: string): Promise<SubRecord | null> {
+  const raw = await kv.get(`sub:${email}`);
+  if (!raw) return null;
+  try {
+    const rec = JSON.parse(raw) as SubRecord;
+    return { ...rec, prefs: normalizePrefs(rec.prefs) };
+  } catch {
+    return null;
+  }
+}
+
+export async function putSub(kv: KVNamespace, rec: SubRecord): Promise<void> {
+  await kv.put(
+    `sub:${rec.email}`,
+    JSON.stringify({ ...rec, prefs: normalizePrefs(rec.prefs) }),
+  );
+  await kv.delete(SUBS_INDEX_KEY); // 名单缓存失效，下次 /api/list 自动重建
+}
+
+export async function removeSub(kv: KVNamespace, email: string): Promise<boolean> {
+  const had = !!(await kv.get(`sub:${email}`));
+  await kv.delete(`sub:${email}`);
+  await kv.delete(SUBS_INDEX_KEY);
+  return had;
+}
+
+const SUBS_INDEX_KEY = "subs:index";
+
+/**
+ * 供 /api/list 使用的订阅名单缓存。
+ * 正常情况下只读一个 KV key；订阅发生变化后第一次会扫描 sub: 前缀重建。
+ * 这样避免对每个订阅者做一次 getUser（N+1），也避免 sub: 与 user: 双写窗口。
+ */
+export async function listSubscribers(kv: KVNamespace): Promise<SubRecord[]> {
+  // 用一次 list 拿 key 集合做对账：新订阅 / 退订即使没来得及失效缓存也能被看到
+  const keys: string[] = [];
+  let cursor: string | undefined;
+  for (let i = 0; i < 20; i++) {
+    const pg = await kv.list({ prefix: "sub:", cursor, limit: 1000 });
+    keys.push(...pg.keys.map((k) => k.name));
+    if (pg.list_complete) break;
+    cursor = pg.cursor;
+  }
+  const keySet = new Set(keys);
+
+  let cached: SubRecord[] = [];
+  const raw = await kv.get(SUBS_INDEX_KEY);
+  if (raw) {
+    try {
+      const arr = JSON.parse(raw) as SubRecord[];
+      if (Array.isArray(arr)) cached = arr;
+    } catch {
+      // 缓存损坏，走下面的重建
+    }
+  }
+
+  const out = cached.filter((r) => r && keySet.has(`sub:${r.email}`));
+  const known = new Set(out.map((r) => r.email));
+  let dirty = out.length !== cached.length || !raw;
+  for (const k of keys) {
+    const email = k.slice(4);
+    if (known.has(email)) continue;
+    const rec = await getSub(kv, email);
+    if (rec) {
+      out.push(rec);
+      known.add(email);
+      dirty = true;
+    }
+  }
+  if (dirty) await kv.put(SUBS_INDEX_KEY, JSON.stringify(out));
+  return out.map((r) => ({ ...r, prefs: normalizePrefs(r.prefs) }));
+}
+
+/** hard bounce / 垃圾邮件投诉后的永久抑制，防止重新登录又进名单。 */
+export async function isSuppressed(kv: KVNamespace, email: string): Promise<boolean> {
+  return !!(await kv.get(`suppressed:${email}`));
+}
+
+export async function suppress(kv: KVNamespace, email: string, reason: string): Promise<void> {
+  await kv.put(`suppressed:${email}`, JSON.stringify({ email, reason, at: new Date().toISOString() }));
 }
 
 /**

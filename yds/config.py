@@ -87,6 +87,8 @@ class Settings:
     # 退订 / 订阅名单（URL 自动派生）
     unsub_url: str
     subscribe_api_url: str
+    notices_api_url: str
+    publish_notices: bool
     unsub_secret: str
     unsub_ttl_days: int
     subscribe_api_token: str
@@ -119,6 +121,8 @@ class Settings:
             # 显式旧变量优先，否则从域名派生
             unsub_url=_s("UNSUB_URL") or (f"{base}/unsubscribe" if base else ""),
             subscribe_api_url=_s("SUBSCRIBE_API_URL") or (f"{base}/api/list" if base else ""),
+            notices_api_url=_s("NOTICES_API_URL") or (f"{base}/api/notices" if base else ""),
+            publish_notices=_s("PUBLISH_NOTICES", "true").lower() not in ("0", "false", "no"),
             unsub_secret=_s("UNSUB_SECRET"),
             unsub_ttl_days=max(1, _i("UNSUB_TTL_DAYS", 180)),
             subscribe_api_token=_s("SUBSCRIBE_API_TOKEN"),

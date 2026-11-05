@@ -15,6 +15,8 @@ export interface Env {
   UNSUB_SECRET_PREVIOUS?: string; // 密钥轮换期的旧密钥
   RESEND_API_KEY: string;
   SUBSCRIBE_API_TOKEN?: string; // 与 GitHub 同名同值
+  /** Resend webhook 的签名密钥（whsec_...），未配置时 webhook 端点关闭 */
+  RESEND_WEBHOOK_SECRET?: string;
   /** @deprecated 旧部署兼容，新部署统一用 SUBSCRIBE_API_TOKEN */
   ADMIN_TOKEN?: string;
 
@@ -30,6 +32,8 @@ export interface Env {
   MAX_PER_IP_HOUR?: string;
   MAX_CONFIRM_PER_DAY?: string;
   LIST_RATE_PER_HOUR?: string;
+  /** 是否要求二次确认订阅；"false" / "0" 关闭（老部署平滑升级用） */
+  DOUBLE_OPT_IN?: string;
   /** @deprecated 旧部署兼容：完整的 "名称 <地址>" */
   MAIL_FROM?: string;
 
@@ -52,6 +56,8 @@ export interface Config {
   maxPerIpHour: number;
   maxConfirmPerDay: number;
   listRatePerHour: number;
+  doubleOptIn: boolean;
+  webhookSecret: string;
 }
 
 function positiveInt(v: string | undefined, fallback: number): number {
@@ -124,6 +130,8 @@ export function getConfig(env: Env): Config {
     maxPerIpHour: positiveInt(env.MAX_PER_IP_HOUR, 10),
     maxConfirmPerDay: positiveInt(env.MAX_CONFIRM_PER_DAY, 200),
     listRatePerHour: positiveInt(env.LIST_RATE_PER_HOUR, 60),
+    doubleOptIn: !/^(0|false|no)$/i.test((env.DOUBLE_OPT_IN || "true").trim()),
+    webhookSecret: (env.RESEND_WEBHOOK_SECRET || "").trim(),
   };
 }
 
