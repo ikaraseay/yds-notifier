@@ -114,7 +114,7 @@ custom_domain = true
 | `MAIL_FROM_NAME` | `研电赛通知` | 否 | 发件人显示名 |
 | `SITE_NAME` | `研电赛通知订阅` | 否 | 页面/邮件标题 |
 | `UNSUB_TTL_DAYS` | `180` | 否 | 退订链接有效天数，与 GitHub 同值 |
-| `MAX_PER_IP_HOUR` / `MAX_CONFIRM_PER_DAY` / `LIST_RATE_PER_HOUR` | `3` / `200` / `60` | 否 | 限流参数 |
+| `MAX_PER_IP_HOUR` / `MAX_CONFIRM_PER_DAY` / `LIST_RATE_PER_HOUR` | `10` / `200` / `60` | 否 | 限流参数 |
 
 > `CUSTOM_DOMAIN`、`WORKERS_DEV_URL`、`PUBLIC_BASE_URL` 三者至少填一个，否则 Worker 会因
 > 无法确定对外地址而 fail-closed（登录接口返回 500，日志里能看到明确提示）。

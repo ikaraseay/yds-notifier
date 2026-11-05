@@ -121,7 +121,7 @@ export function getConfig(env: Env): Config {
     // 新名优先，旧名兜底
     adminToken: env.SUBSCRIBE_API_TOKEN || env.ADMIN_TOKEN || "",
     unsubTtlDays: positiveInt(env.UNSUB_TTL_DAYS, 180),
-    maxPerIpHour: positiveInt(env.MAX_PER_IP_HOUR, 3),
+    maxPerIpHour: positiveInt(env.MAX_PER_IP_HOUR, 10),
     maxConfirmPerDay: positiveInt(env.MAX_CONFIRM_PER_DAY, 200),
     listRatePerHour: positiveInt(env.LIST_RATE_PER_HOUR, 60),
   };
