@@ -180,6 +180,10 @@ Worker 会按 Svix 规范验签（时间戳 ±5 分钟防重放），验证通�
 | `UNSUB_TTL_DAYS` | `180` | 同 3.2 |
 | `MAIL_PROVIDER` / `MAIL_FROM_NAME` / `SITE_NAME` / `REPLY_TO` | 文案类 | 可选 |
 | `SMTP_*` | 仅 `MAIL_PROVIDER=smtp` | 可选 |
+| `AI_API_KEY` | DeepSeek（或任意 OpenAI 兼容服务）的 Key | **使用 AI 分析时必填**；留空自动降级 |
+| `AI_ENABLED` / `AI_MODEL` / `AI_BASE_URL` | `true` / `deepseek-flash` / `https://api.deepseek.com` | 可选，换 provider 只改这三项 |
+| `AI_THINKING` / `AI_TEMPERATURE` / `AI_MAX_TOKENS` | `false` / `0.1` / `4096` | 可选，默认关闭 thinking 以保证稳定 JSON |
+| `AI_BATCH_SIZE` / `AI_TIMEOUT` / `AI_MAX_BODY_CHARS` | `8` / `60` / `3000` | 可选 |
 | `PUBLISH_NOTICES` / `NOTICES_API_URL` | `true` / 留空自动派生 | 归档 / RSS / 日历同步开关，可选 |
 | `HEARTBEAT_URL` / `ALERT_WEBHOOK_URL` | 外部拨测 / 告警地址 | 失败可见性，可选 |
 

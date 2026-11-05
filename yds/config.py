@@ -39,6 +39,21 @@ def _i(key: str, default: int) -> int:
         return default
 
 
+def _f(key: str, default: float) -> float:
+    raw = _s(key)
+    try:
+        return float(raw) if raw else default
+    except ValueError:
+        return default
+
+
+def _b(key: str, default: bool) -> bool:
+    raw = _s(key).lower()
+    if not raw:
+        return default
+    return raw not in ("0", "false", "no", "off")
+
+
 def _clean_host(v: str) -> str:
     """把可能带 scheme / 路径的自定义域名清洗成纯 hostname。"""
     v = (v or "").strip().lower()
@@ -107,6 +122,19 @@ class Settings:
     unsub_ttl_days: int
     subscribe_api_token: str
 
+    # AI 分析（OpenAI 兼容接口，默认 DeepSeek）
+    # 提示词版本不在这里：由 prompts/manifest.yaml 的 active 决定，避免双源
+    ai_enabled: bool
+    ai_api_key: str
+    ai_base_url: str
+    ai_model: str
+    ai_thinking: bool
+    ai_temperature: float
+    ai_max_tokens: int
+    ai_timeout: int
+    ai_batch_size: int
+    ai_max_body_chars: int
+
     @classmethod
     def load(cls) -> "Settings":
         # 兼容旧部署：MAIL_FROM 曾是纯地址
@@ -143,6 +171,16 @@ class Settings:
             unsub_secret=_s("UNSUB_SECRET"),
             unsub_ttl_days=max(1, _i("UNSUB_TTL_DAYS", 180)),
             subscribe_api_token=_s("SUBSCRIBE_API_TOKEN"),
+            ai_enabled=_b("AI_ENABLED", True),
+            ai_api_key=_s("AI_API_KEY"),
+            ai_base_url=_s("AI_BASE_URL", "https://api.deepseek.com").rstrip("/"),
+            ai_model=_s("AI_MODEL", "deepseek-flash"),
+            ai_thinking=_b("AI_THINKING", False),
+            ai_temperature=_f("AI_TEMPERATURE", 0.1),
+            ai_max_tokens=max(256, _i("AI_MAX_TOKENS", 4096)),
+            ai_timeout=max(5, _i("AI_TIMEOUT", 60)),
+            ai_batch_size=max(1, _i("AI_BATCH_SIZE", 8)),
+            ai_max_body_chars=max(200, _i("AI_MAX_BODY_CHARS", 3000)),
         )
 
     def api_candidates(self, url: str, path: str) -> list[str]:

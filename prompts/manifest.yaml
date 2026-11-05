@@ -1,0 +1,26 @@
+# 提示词版本注册表。
+# 模型 / 温度 / max_tokens / thinking 不在这里配置，统一由 .env 的 AI_* 注入，
+# 保证「换 provider 不改提示词」。active 变化会让 data/ai.json 缓存全量失效。
+
+version: 1
+
+prompts:
+  notices:
+    active: v1
+    system: notices/v1.system.md
+    user: notices/v1.user.md
+    schema: schemas/analysis.schema.json
+    examples: schemas/examples.json
+    changelog:
+      - version: v1
+        date: 2026-11-06
+        note: >-
+          初版。一次批量输出分类、一句话摘要、紧急度与事件日期证据。
+          采用「模型提议、代码决定」：日期只给原文片段，禁止模型换算，
+          规避跨年补错年份与「把发布日期当事件日」两类问题。
+
+  digest:
+    active: v1
+    system: digest/v1.system.md
+    status: reserved
+    note: 摘要邮件导语生成，第二期启用；当前不参与任何运行时调用。

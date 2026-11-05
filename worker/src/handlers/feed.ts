@@ -14,6 +14,16 @@ interface Attachment {
   url: string;
 }
 
+/** AI 抽出的真实事件日（已由 Python 端确定性归一化成 YYYY-MM-DD）。 */
+interface AiEvent {
+  date: string;
+  evidence: string;
+  label: string;
+  kind: string;
+  location: string;
+  confidence: number;
+}
+
 interface Notice {
   uid: string;
   title: string;
@@ -25,7 +35,18 @@ interface Notice {
   deadline: string;
   attachments?: Attachment[];
   changeKind?: 'new' | 'changed';
+  aiCategory?: string;
+  aiSummary?: string;
+  aiUrgency?: string;
+  aiReason?: string;
+  aiEvents?: AiEvent[];
+  aiConfidence?: number;
+  aiVersion?: string;
 }
+
+const URGENCIES = ['critical', 'high', 'normal', 'low'];
+const AI_CATEGORIES = ['报名参赛', '评审与名单', '决赛与收官', '赛事动态', '其他通知'];
+const EVENT_KINDS = ['deadline', 'event', 'notice', 'other'];
 
 interface FeedPayload {
   site?: string;
@@ -60,6 +81,36 @@ function safeUrl(v: unknown): string {
   }
 }
 
+function asNum(v: unknown, max = 1): number {
+  if (typeof v !== 'number' || !Number.isFinite(v)) return 0;
+  return Math.min(max, Math.max(0, v));
+}
+
+/**
+ * AI 事件白名单。date 必须是严格 YYYY-MM-DD，否则整条丢弃 ——
+ * 避免模型输出被直接拼进 DTSTART 而让日历退回发布日期。
+ */
+function normalizeEvents(raw: unknown): AiEvent[] {
+  if (!Array.isArray(raw)) return [];
+  const out: AiEvent[] = [];
+  for (const item of raw.slice(0, 4)) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const o = item as Record<string, unknown>;
+    const day = asStr(o.date).trim();
+    if (!validDate(day)) continue;
+    const kind = asStr(o.kind).trim();
+    out.push({
+      date: day,
+      evidence: trunc(asStr(o.evidence).trim(), 60),
+      label: trunc(asStr(o.label).trim(), 40),
+      kind: EVENT_KINDS.includes(kind) ? kind : 'other',
+      location: trunc(asStr(o.location).trim(), 100),
+      confidence: asNum(o.confidence),
+    });
+  }
+  return out;
+}
+
 /** 白名单字段 + 截断 + URL 校验；title / uid 为空的条目直接丢弃。 */
 function normalizeNotice(raw: unknown): Notice | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
@@ -77,6 +128,8 @@ function normalizeNotice(raw: unknown): Notice | null {
   }
   const changeKind = o.changeKind === 'changed' ? 'changed' : o.changeKind === 'new' ? 'new' : undefined;
 
+  const aiCategory = trunc(asStr(o.aiCategory).trim(), 100);
+  const aiUrgency = asStr(o.aiUrgency).trim();
   return {
     uid,
     title,
@@ -88,6 +141,13 @@ function normalizeNotice(raw: unknown): Notice | null {
     deadline: trunc(asStr(o.deadline).trim(), 20),
     attachments,
     changeKind,
+    aiCategory: AI_CATEGORIES.includes(aiCategory) ? aiCategory : '',
+    aiSummary: trunc(asStr(o.aiSummary).trim(), 200),
+    aiUrgency: URGENCIES.includes(aiUrgency) ? aiUrgency : '',
+    aiReason: trunc(asStr(o.aiReason).trim(), 160),
+    aiEvents: normalizeEvents(o.aiEvents),
+    aiConfidence: asNum(o.aiConfidence),
+    aiVersion: trunc(asStr(o.aiVersion).trim(), 40),
   };
 }
 
@@ -194,15 +254,27 @@ export async function handleNoticesPost(req: Request, env: Env): Promise<Respons
 function archiveItem(n: Notice): string {
   const meta = [n.date, n.category, n.source].filter(Boolean).map(esc).join(' · ');
   const updated = n.changeKind === 'changed' ? ' <span class="count">更新</span>' : '';
+  const important = n.aiUrgency === 'critical' ? ' <span class="count">重要</span>' : '';
   const href = safeUrl(n.url);
   const title = esc(n.title);
   const link = href
     ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${title}</a>`
     : title;
-  const deadline = n.deadline ? `<p class="sub">截止 / 日程：${esc(n.deadline)}</p>` : '';
+  const events = (n.aiEvents || [])
+    .map((e) => {
+      const label = e.label || (e.kind === 'deadline' ? '截止' : '日程');
+      const where = e.location ? ` · ${esc(e.location)}` : '';
+      return `<p class="sub">${esc(label)}：${esc(e.date)}${where}</p>`;
+    })
+    .join('');
+  // 有结构化事件时不再重复显示旧的单值 deadline
+  const deadline = !events && n.deadline ? `<p class="sub">截止 / 日程：${esc(n.deadline)}</p>` : '';
+  const aiSummary = n.aiSummary ? `<p class="sub">摘要：${esc(n.aiSummary)}</p>` : '';
   return `<div class="detail">
-    <p class="sub">${meta}${updated}</p>
+    <p class="sub">${meta}${updated}${important}</p>
     <p>${link}</p>
+    ${aiSummary}
+    ${events}
     ${deadline}
   </div>`;
 }
@@ -245,8 +317,13 @@ export async function handleFeed(env: Env): Promise<Response> {
       `<description>${xmlEsc('研电赛通知订阅中心的最近通知归档')}</description>`,
     ];
     for (const n of notices) {
-      const desc = [n.summary];
-      if (n.deadline) desc.push(`截止 / 日程：${n.deadline}`);
+      const desc = [n.aiSummary || n.summary];
+      for (const e of n.aiEvents || []) {
+        const label = e.label || (e.kind === 'deadline' ? '截止' : '日程');
+        desc.push(`${label}：${e.date}${e.location ? `（${e.location}）` : ''}`);
+      }
+      if (!(n.aiEvents || []).length && n.deadline) desc.push(`截止 / 日程：${n.deadline}`);
+      if (n.aiUrgency === 'critical') desc.push('【重要】');
       if (n.changeKind === 'changed') desc.push('【更新】该通知有更新');
       lines.push('<item>');
       lines.push(`<title>${xmlEsc(n.title)}</title>`);
@@ -288,6 +365,24 @@ function dateCompact(s: string): string {
   return validDate(s) ? s.replace(/-/g, '') : '';
 }
 
+/** 全天事件的次日，用于 DTEND（部分客户端没有 DTEND 会显示成 0 天）。 */
+function nextDay(compact: string): string {
+  const iso = `${compact.slice(0, 4)}-${compact.slice(4, 6)}-${compact.slice(6, 8)}T00:00:00Z`;
+  const d = new Date(iso);
+  d.setUTCDate(d.getUTCDate() + 1);
+  return d.toISOString().slice(0, 10).replace(/-/g, '');
+}
+
+/**
+ * SEQUENCE 由事件内容派生：内容一变值就变，订阅客户端会刷新该事件；
+ * UID 保持不变，避免延期时产生重复事件（RFC 5545）。
+ */
+function seqOf(s: string): number {
+  let h = 0;
+  for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) | 0;
+  return Math.abs(h % 100000);
+}
+
 export async function handleCalendar(env: Env): Promise<Response> {
   const headers = cacheableHeaders('text/calendar;charset=utf-8', {
     'Content-Disposition': 'inline; filename="yds-notices.ics"',
@@ -307,21 +402,46 @@ export async function handleCalendar(env: Env): Promise<Response> {
       'X-WR-TIMEZONE:Asia/Shanghai',
     ];
     for (const n of notices) {
-      const start = dateCompact(n.deadline) || dateCompact(n.date);
-      if (!start) continue; // deadline 与 date 都无效则跳过该条
-      const summary = `${n.changeKind === 'changed' ? '【更新】' : ''}[${n.category}] ${n.title}`;
-      const description = n.source ? `${n.summary}\n来源：${n.source}` : n.summary;
+      // 优先用 AI 从公告正文抽出的真实事件日；没有时才回退到规则 deadline 或发布日期。
+      // 一条公告有多个时间节点（报名截止 + 决赛 + 公示期）就生成多个 VEVENT。
+      const events = n.aiEvents || [];
+      const pairs: Array<{ start: string; ev?: AiEvent }> = [];
+      if (events.length) {
+        for (const ev of events) {
+          const day = dateCompact(ev.date);
+          if (day) pairs.push({ start: day, ev });
+        }
+      } else {
+        const day = dateCompact(n.deadline) || dateCompact(n.date);
+        if (day) pairs.push({ start: day });
+      }
+      if (!pairs.length) continue;
+
+      const base = `${n.changeKind === 'changed' ? '【更新】' : ''}`
+        + `${n.aiUrgency === 'critical' ? '【重要】' : ''}[${n.category}] ${n.title}`;
+      const descParts = [n.aiSummary || n.summary];
+      if (n.source) descParts.push(`来源：${n.source}`);
       const href = safeUrl(n.url);
-      lines.push('BEGIN:VEVENT');
-      lines.push(`UID:${icalEsc(`${n.uid}@${host}`)}`);
-      lines.push(`DTSTAMP:${stamp}`);
-      lines.push(`DTSTART;VALUE=DATE:${start}`);
-      lines.push(`SUMMARY:${icalEsc(summary)}`);
-      if (href) lines.push(`URL:${href}`);
-      lines.push(`DESCRIPTION:${icalEsc(description)}`);
-      lines.push('SEQUENCE:0');
-      lines.push('TRANSP:TRANSPARENT');
-      lines.push('END:VEVENT');
+
+      pairs.forEach(({ start, ev }, idx) => {
+        const parts = [...descParts];
+        if (ev?.evidence) parts.push(`原文日期：${ev.evidence}`);
+        if (ev?.location) parts.push(`地点：${ev.location}`);
+        // 单事件沿用旧 UID；多事件加序号，保证延期时不产生重复
+        const uid = pairs.length > 1 ? `${n.uid}:${idx}@${host}` : `${n.uid}@${host}`;
+        lines.push('BEGIN:VEVENT');
+        lines.push(`UID:${icalEsc(uid)}`);
+        lines.push(`DTSTAMP:${stamp}`);
+        lines.push(`DTSTART;VALUE=DATE:${start}`);
+        lines.push(`DTEND;VALUE=DATE:${nextDay(start)}`);
+        lines.push(`SUMMARY:${icalEsc(base + (ev?.label ? ` · ${ev.label}` : ''))}`);
+        if (href) lines.push(`URL:${href}`);
+        if (ev?.location) lines.push(`LOCATION:${icalEsc(ev.location)}`);
+        lines.push(`DESCRIPTION:${icalEsc(parts.filter(Boolean).join('\n'))}`);
+        lines.push(`SEQUENCE:${seqOf(`${n.uid}|${start}|${ev?.label}|${ev?.evidence}|${n.aiSummary}`)}`);
+        lines.push('TRANSP:TRANSPARENT');
+        lines.push('END:VEVENT');
+      });
     }
     lines.push('END:VCALENDAR');
     return new Response(lines.join('\r\n') + '\r\n', { headers });

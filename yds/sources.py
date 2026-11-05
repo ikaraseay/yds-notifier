@@ -176,6 +176,10 @@ class CpipcSource(BaseSource):
 
         body = soup.select_one(".articleContent")
         if body:
+            full = clean_text(body.get_text(" ", strip=True), 6000)
+            # raw_body 只作 AI 输入，不进 payload / seen.json / 邮件；
+            # summary 保持原有逻辑，避免改变 detail_hash 而误报内容更新
+            notice.raw_body = full
             notice.summary = notice.summary or clean_text(body.get_text(" ", strip=True))
             for a in body.find_all("a", href=True):
                 text = a.get_text(" ", strip=True)
@@ -243,6 +247,8 @@ class CieSource(BaseSource):
 
         body = soup.select_one(".headlines-news-content")
         if body:
+            full = clean_text(body.get_text(" ", strip=True), 6000)
+            notice.raw_body = full
             notice.summary = notice.summary or clean_text(body.get_text(" ", strip=True), 300)
             for a in body.find_all("a", href=True):
                 text = a.get_text(" ", strip=True)

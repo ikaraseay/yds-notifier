@@ -56,6 +56,17 @@ jobs:
       # 归档 / RSS / 日历的数据同步；NOTICES_API_URL 不填时自动派生
       NOTICES_API_URL: ${{ secrets.NOTICES_API_URL }}
       PUBLISH_NOTICES: ${{ secrets.PUBLISH_NOTICES || 'true' }}
+      # AI 分析（OpenAI 兼容接口，默认 DeepSeek）；提示词在 prompts/ 目录
+      AI_ENABLED: ${{ secrets.AI_ENABLED || 'true' }}
+      AI_API_KEY: ${{ secrets.AI_API_KEY }}
+      AI_BASE_URL: ${{ secrets.AI_BASE_URL || 'https://api.deepseek.com' }}
+      AI_MODEL: ${{ secrets.AI_MODEL || 'deepseek-flash' }}
+      AI_THINKING: ${{ secrets.AI_THINKING || 'false' }}
+      AI_TEMPERATURE: ${{ secrets.AI_TEMPERATURE || '0.1' }}
+      AI_MAX_TOKENS: ${{ secrets.AI_MAX_TOKENS || '4096' }}
+      AI_TIMEOUT: ${{ secrets.AI_TIMEOUT || '60' }}
+      AI_BATCH_SIZE: ${{ secrets.AI_BATCH_SIZE || '8' }}
+      AI_MAX_BODY_CHARS: ${{ secrets.AI_MAX_BODY_CHARS || '3000' }}
       REPO_URL: ${{ github.server_url }}/${{ github.repository }}
       TZ: Asia/Shanghai
     steps:
@@ -111,7 +122,7 @@ jobs:
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # 本轮无变化时 state 不会写文件，此时不应让 workflow 失败
-          git add -- data/seen.json data/pending.json 2>/dev/null || true
+          git add -- data/seen.json data/pending.json data/ai.json 2>/dev/null || true
           if git diff --cached --quiet; then
             echo "状态无变化，跳过提交"
             exit 0

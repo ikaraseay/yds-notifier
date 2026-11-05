@@ -87,6 +87,8 @@
 - **归档 · RSS · 日历**：`/archive`、`/feed.xml`、`/calendar.ics` 无需注册即可查看全部通知与报名截止日。
 - **退订挽留与统计**：退订页收集原因并提供「改成周报」；`/api/stats` 输出统计。
 - **失败可见**：发信失败不写已读状态、下轮重试；Actions 失败告警 + 成功心跳；Resend webhook 验签后自动清理退信 / 投诉地址。
+- **AI 推送分析**：用 OpenAI 兼容接口（默认 DeepSeek）做分类、一句话摘要、紧急度判断与**公告正文里的真实事件日期抽取**；提示词独立存放在 `prompts/`，结果按内容指纹缓存。
+- **智能推送编排**：AI 判为 `critical` 的通知走「紧急快报」，无视日报/周报设置立即送达；低价值动态在摘要里折叠；邮件与归档页展示 AI 摘要与日程。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -101,7 +103,7 @@
 | 订阅中心 | Cloudflare Workers · TypeScript · esbuild · Wrangler |
 | 状态存储 | Workers KV（账号 / 订阅 / 会话） · Durable Objects（限流） |
 | 部署 | Cloudflare Workers Builds · Custom Domains |
-| 质量保障 | `yds.selftest`（63 项，FAIL 返回非零） · Worker e2e（142 项） · `tsc --noEmit` · Wrangler dry-run |
+| 质量保障 | `yds.selftest`（124 项，FAIL 返回非零） · Worker e2e（167 项） · `tsc --noEmit` · Wrangler dry-run |
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -283,10 +285,34 @@ GitHub 侧需要 `gh auth login --web --scopes "repo,workflow"`；也可在两�
 | Cloudflare → Secrets | `UNSUB_SECRET` · `SUBSCRIBE_API_TOKEN` · `RESEND_API_KEY`（可选 `UNSUB_SECRET_PREVIOUS`、`RESEND_WEBHOOK_SECRET`） |
 | Cloudflare → Variables | `CUSTOM_DOMAIN` 或 `WORKERS_DEV_URL` · `MAIL_FROM_ADDRESS` · `MAIL_TO`（可选显示名、限流参数、`DOUBLE_OPT_IN`） |
 | Cloudflare → Bindings | `SUBS`（KV） · `RATE`（Durable Object，已配好） |
-| GitHub → Actions Secrets | 与 Cloudflare 同名同值的密钥、域名、发信配置；可选 `PUBLISH_NOTICES`、`HEARTBEAT_URL`、`ALERT_WEBHOOK_URL` |
+| GitHub → Actions Secrets | 与 Cloudflare 同名同值的密钥、域名、发信配置；`AI_API_KEY`（DeepSeek）；可选 `PUBLISH_NOTICES`、`HEARTBEAT_URL`、`ALERT_WEBHOOK_URL` |
 
 **三处一致性**：`UNSUB_SECRET` 两端相同；`SUBSCRIBE_API_TOKEN` 两端同名同值；
 `CUSTOM_DOMAIN` 两端同值（`UNSUB_URL` / `SUBSCRIBE_API_URL` / `NOTICES_API_URL` 自动派生，无需填写）。
+
+### AI 分析配置
+
+AI 只在 **GitHub Actions 的 Python 端**运行，Cloudflare Worker 不调用模型，因此
+`AI_API_KEY` 只需填成 GitHub Secret。默认走 DeepSeek 的 OpenAI 兼容接口：
+
+| 配置 | 默认值 | 说明 |
+|---|---|---|
+| `AI_ENABLED` | `true` | 关闭后退回关键词分类 + 正则日期，不影响发信 |
+| `AI_API_KEY` | 空 | **必填**，DeepSeek 控制台创建；留空即自动降级 |
+| `AI_BASE_URL` | `https://api.deepseek.com` | 换 provider 只改这里 |
+| `AI_MODEL` | `deepseek-flash` | 也可填 `deepseek-v4-pro` 或任意兼容模型 |
+| `AI_THINKING` | `false` | 默认关闭：稳定 JSON、低延迟、更便宜 |
+| `AI_TEMPERATURE` | `0.1` | 仅非 thinking 模式生效 |
+| `AI_MAX_TOKENS` | `4096` | 留够，否则 JSON 会被截断 |
+| `AI_BATCH_SIZE` / `AI_TIMEOUT` | `8` / `60` | 批量条数 / 超时秒数 |
+| `AI_MAX_BODY_CHARS` | `3000` | 单条正文截断长度 |
+
+提示词在 `prompts/` 目录，版本由 `prompts/manifest.yaml` 的 `active` 决定；
+改版本会让 `data/ai.json` 缓存全量失效重算。完整设计（调研、数据契约、
+防幻觉策略、降级链、成本）见 [AI 推送设计方案](docs/AI推送设计方案.md)。
+
+> 即使不填 `AI_API_KEY`，日历修复依然生效：系统会渐进回填历史公告正文，
+> 用确定性规则抽出真实事件日。AI 只是把准确率从「规则」提升到「语义级」。
 
 本轮新增的可选配置：`RESEND_WEBHOOK_SECRET`（Resend → Webhooks 的签名密钥，端点填
 `https://<站点>/api/webhooks/resend`，勾选 `email.bounced` / `email.complained` / `suppression.added`）、
@@ -348,6 +374,12 @@ yds-notifier/
 ├── .env.example                  # 模板 + 每项去处标注
 ├── config.yaml                   # 业务规则：数据源 / 去重 / 主题前缀
 ├── requirements.txt
+├── prompts/                         # 提示词（纯文本，独立版本管理，不掺代码）
+│   ├── README.md                    # 编写规范 / 修改流程 / 安全硬约束
+│   ├── manifest.yaml                # active 版本注册表 + changelog
+│   ├── notices/                     # v1.system.md / v1.user.md
+│   ├── digest/                      # 摘要导语（预留）
+│   └── schemas/                     # analysis.schema.json + examples.json
 ├── scripts/
 │   ├── ops.sh                    # 运维总入口：doctor / status / deploy / check ...
 │   ├── lib.sh                    # 公共函数：配置读取 / 输出 / Wrangler 包装
@@ -358,7 +390,9 @@ yds-notifier/
 │   ├── 安全评审报告.md             # 安全评审发现与修复
 │   ├── 订阅页面部署指南.md         # 账号体系与接口说明
 │   ├── 退订服务部署指南.md         # 退订链路与签名契约
-│   └── 域名发信配置指南.md         # Resend + DNS 步骤
+│   ├── 域名发信配置指南.md         # Resend + DNS 步骤
+│   ├── AI推送设计方案.md           # 调研 / 目录 / 数据契约 / 降级 / 成本
+│   └── 改进评估与功能规划.md
 ├── worker/
 │   ├── src/index.ts              # 路由层
 │   ├── src/env.ts                # 配置派生：域名 / 多来源白名单
@@ -372,11 +406,19 @@ yds-notifier/
 │   └── tests/worker.e2e.mjs      # 端到端测试
 ├── data/
 │   ├── seen.json                 # 已推送记录 + 变更指纹（Actions 自动回写）
-│   └── pending.json              # 日报 / 周报待发池
+│   ├── pending.json              # 日报 / 周报待发池
+│   └── ai.json                   # AI 分析结果 + 历史正文缓存
 ├── .github/workflows/
 │   ├── notify.yml                # 定时抓取发信 + 状态回写 + 告警 / 心跳
 │   └── worker-ci.yml             # 类型检查 / 测试 / 构建
 └── yds/
+    ├── ai/                       # AI 能力子包（不依赖业务模型）
+    │   ├── client.py             # OpenAI 兼容客户端（默认 DeepSeek）
+    │   ├── prompts.py            # 加载 / 渲染 prompts/
+    │   ├── schema.py             # 输出校验 + 日期确定性归一化
+    │   ├── cache.py              # data/ai.json 读写
+    │   ├── body.py               # 历史正文渐进回填（host 白名单）
+    │   └── analyzer.py           # 唯一编排入口
     ├── config.py                 # 统一读取 .env 与域名派生
     ├── models.py · fetch.py · sources.py · state.py
     ├── mailer.py · senders.py · recipients.py · unsub.py
@@ -481,6 +523,8 @@ yds-notifier/
 | Worker 读不到变量 | 变量填进了 Build variables（仅构建期可见），应移到 Variables and Secrets |
 | Actions 报 `pathspec 'data/seen.json'` | 状态文件未生成；工作流已做容错，也可用仓库内预置的空状态文件恢复 |
 | 归档 / RSS / 日历一直为空 | 看 Actions 日志有没有「归档数据已同步」；`403 Just a moment...` 是自定义域被 Cloudflare 托管质询，填 `WORKERS_DEV_URL` 让机器接口走 workers.dev（失败会自动回退） |
+| 日历还是显示发布日期 | 该公告正文里没有明确日期，或 AI 未启用且规则没抽到；看 `data/ai.json` 的 `aiEvents`，或填 `AI_API_KEY` 启用语义抽取 |
+| AI 没有生效 / 费用担心 | 看 Actions 日志「AI 未启用」或「AI 完成：N 次调用」；结果按内容指纹缓存，收敛后无新公告时零调用；也可直接 `AI_ENABLED=false` |
 | 会不会漏通知 | 状态回写失败时下轮会重发未确认的通知，宁可重复、不漏发 |
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
@@ -502,6 +546,8 @@ yds-notifier/
 - [x] 双重确认与欢迎邮件
 - [x] 失败告警、心跳与 Resend webhook 自动清理
 - [x] 退订原因统计（`/api/stats`，可视化界面待做）
+- [x] AI 分析 / 分类 / 摘要与真实事件日期（日历不再用发布日期）
+- [x] 紧急快报与低价值动态折叠
 - [ ] DMARC 策略与送达率监控
 - [ ] 更多官方渠道与关键词配置化
 - [ ] 订阅增长与退订原因的可视化统计
