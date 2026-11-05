@@ -20,10 +20,25 @@ from typing import List, Optional, Sequence
 from urllib.parse import urlparse
 
 from .models import Notice
+from .personas import AUDIENCE_NAMES, AUDIENCES, primary_audience
 
 log = logging.getLogger("yds")
 
 CATEGORY_ORDER = ("报名参赛", "评审与名单", "决赛与收官", "赛事动态", "其他通知")
+
+# 人员视角分区的标题与主题色
+AUDIENCE_TITLES = {
+    "student": "参赛学生 · 你需要做什么",
+    "advisor": "指导教师 · 请关注",
+    "admin": "培养单位 · 待办",
+    "organizer": "分赛区 / 承办方 · 关注",
+}
+AUDIENCE_COLORS = {
+    "student": "#FF6B6B",
+    "advisor": "#4D96FF",
+    "admin": "#2E2A33",
+    "organizer": "#7B9EF8",
+}
 
 # 每个分组配主题色（柔和马卡龙色系），不用 emoji，靠色块与文字区分
 # 孟菲斯色板：珊瑚/蓝/黄三色区分分类，奶油纸底色
@@ -66,7 +81,11 @@ def build_text(notices: Sequence[Notice], site: str = "", unsubscribe_url: str =
         flag = "【更新】" if n.change_kind == "changed" else ""
         urgent = "【重要】" if n.ai_urgency == "critical" else ""
         lines.append(f"[{i}] {urgent}{flag}{n.title}")
-        lines.append(f"    {n.date_text}｜{n.category}｜{n.source}")
+        lines.append(f"    {n.date_text}｜{n.category}｜{n.stage}｜{n.contest}｜{n.source}")
+        if n.audiences:
+            lines.append(f"    面向：{' / '.join(AUDIENCE_NAMES.get(a, a) for a in n.audiences)}")
+        if n.action:
+            lines.append(f"    要做什么：{n.action}")
         if n.ai_summary or n.summary:
             lines.append(f"    {n.ai_summary or n.summary}")
         for e in n.ai_events[:4]:
@@ -104,6 +123,57 @@ def _safe_url(v: str) -> str:
     if p.scheme.lower() not in ("http", "https") or not p.netloc:
         return "#"
     return v
+
+
+def _persona_block(notices: Sequence[Notice]) -> str:
+    """邮件顶部「不同角色，各自要做的事」三栏摘要。
+
+    同一条通知可能同时面向学生与导师，这里**允许重复出现**：
+    读者只关心自己那一栏，重复比遗漏好。
+    """
+    rows = []
+    for aud in AUDIENCES:
+        items = [n for n in notices if aud in (n.audiences or [])]
+        if not items:
+            continue
+        # 有明确动作的排前面，动态类垫底
+        items.sort(key=lambda n: (0 if n.action else 1, -n.weight))
+        color = AUDIENCE_COLORS.get(aud, "#7B9EF8")
+        lines = []
+        for n in items[:3]:
+            action = f'<span style="color:#8a90a2;"> — {_esc(n.action)}</span>' if n.action else ""
+            lines.append(
+                f'<div style="margin:7px 0 0;font-size:12px;line-height:19px;color:#2b2f3d;">'
+                f'<span style="display:inline-block;padding:1px 6px;background:#FFD93D;'
+                f'border:1px solid #2E2A33;border-radius:4px;font-size:10px;font-weight:700;'
+                f'margin-right:6px;">{_esc(n.stage)}</span>'
+                f'<a href="{_esc(_safe_url(n.url))}" style="color:#2b2f3d;text-decoration:none;">'
+                f'{_esc(n.title)}</a>{action}</div>'
+            )
+        rows.append(
+            f'<tr><td style="padding:10px 0 0;">'
+            f'<div style="font-size:13px;font-weight:700;color:{color};">'
+            f'<span style="display:inline-block;width:9px;height:9px;border-radius:2px;'
+            f'background:{color};margin-right:7px;vertical-align:middle;"></span>'
+            f'{_esc(AUDIENCE_TITLES.get(aud, AUDIENCE_NAMES.get(aud, aud)))}'
+            f'<span style="color:#b8bccb;font-weight:400;">&nbsp;{len(items)}</span></div>'
+            f'{"".join(lines)}</td></tr>'
+        )
+    if not rows:
+        return ""
+    return f"""
+    <tr><td style="padding:14px 0 0;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+             style="background:#ffffff;border:3px solid #2E2A33;border-radius:8px;">
+        <tr><td style="padding:16px 18px 18px;">
+          <div style="font-size:12px;color:#8a90a2;letter-spacing:1px;font-weight:700;">
+            不同角色 · 各自要做的事</div>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            {''.join(rows)}
+          </table>
+        </td></tr>
+      </table>
+    </td></tr>"""
 
 
 def _notice_card(n: Notice, compact: bool = False) -> str:
@@ -184,6 +254,26 @@ def _notice_card(n: Notice, compact: bool = False) -> str:
         )
         event_block = f'<tr><td style="padding:10px 18px 0;">{rows}</td></tr>'
 
+    meta_bits = []
+    if n.contest:
+        meta_bits.append(n.contest)
+    if n.audiences:
+        meta_bits.append("面向：" + " / ".join(AUDIENCE_NAMES.get(a, a) for a in n.audiences))
+    meta_block = (
+        f'<tr><td style="padding:8px 18px 0;font-size:11px;color:#8a90a2;line-height:17px;">'
+        f'<span style="display:inline-block;padding:1px 7px;background:#EEF3FF;'
+        f'border:1px solid #2E2A33;border-radius:4px;font-weight:700;margin-right:6px;">'
+        f'{_esc(n.stage)}</span>{_esc(" · ".join(meta_bits))}</td></tr>'
+        if meta_bits else ""
+    )
+    action_block = (
+        f'<tr><td style="padding:10px 18px 0;">'
+        f'<div style="background:#FFF4E4;border-left:4px solid #FF6B6B;padding:8px 12px;'
+        f'font-size:12px;line-height:18px;color:#2b2f3d;">'
+        f'<b>要做什么：</b>{_esc(n.action)}</div></td></tr>'
+        if n.action else ""
+    )
+
     return f"""
     <tr><td style="padding:0 0 14px;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
@@ -202,7 +292,9 @@ def _notice_card(n: Notice, compact: bool = False) -> str:
           <a href="{_esc(_safe_url(n.url))}" style="font-size:16px;line-height:25px;color:#2b2f3d;
              font-weight:600;text-decoration:none;">{_esc(n.title)}</a>{badge}
         </td></tr>
+        {meta_block}
         {summary_block}
+        {action_block}
         {event_block}
         {attach_block}
         <tr><td style="padding:14px 18px 18px;">
@@ -222,10 +314,18 @@ def build_html(
     unsubscribe_url: str = "",
     issue_url: str = "",
     compact_low: bool = False,
+    persona: str = "",
 ) -> str:
     groups = {c: [] for c in CATEGORY_ORDER}
     for n in notices:
         groups.setdefault(n.category, []).append(n)
+
+    persona_line = ""
+    if persona:
+        persona_line = (
+            f'<div style="padding:6px 0 0;font-size:12px;color:#5a6072;">'
+            f'本版面向：{_esc(AUDIENCE_NAMES.get(persona, persona))}</div>'
+        )
 
     blocks: List[str] = []
     for cat in CATEGORY_ORDER:
@@ -305,9 +405,12 @@ def build_html(
           研电赛有 <b style="background:#FF6B6B;color:#fff;padding:1px 8px;
           border-radius:4px;">{count}</b> {count_label}
         </div>
+        {persona_line}
       </td></tr>
     </table>
   </td></tr>
+
+  {'' if persona else _persona_block(notices)}
 
   {''.join(blocks)}
 

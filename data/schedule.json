@@ -1,0 +1,198 @@
+{
+  "version": 1,
+  "year": 2026,
+  "updatedAt": "2026-11-05T18:36:48+00:00",
+  "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6",
+  "contests": [
+    {
+      "contest": "智慧城市技术与创意设计大赛",
+      "signupStart": "2026-06-27",
+      "signupEnd": "2026-10-23",
+      "submitStart": "2026-06-27",
+      "submitEnd": "2026-10-25",
+      "finalStart": "2026-12-26",
+      "finalEnd": "2026-12-27",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "未来飞行器创新大赛",
+      "signupStart": "2026-06-10",
+      "signupEnd": "2026-08-30",
+      "submitStart": "2026-06-10",
+      "submitEnd": "2026-09-01",
+      "finalStart": "2026-10-30",
+      "finalEnd": "2026-11-01",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "数学建模竞赛",
+      "signupStart": "2026-06-01",
+      "signupEnd": "2026-09-19",
+      "submitStart": "2026-09-27",
+      "submitEnd": "2026-09-28",
+      "finalStart": "2026-12-11",
+      "finalEnd": "2026-12-13",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "电子设计竞赛",
+      "signupStart": "2026-04-03",
+      "signupEnd": "2026-06-20",
+      "submitStart": "2026-04-03",
+      "submitEnd": "2026-06-20",
+      "finalStart": "2026-08-11",
+      "finalEnd": "2026-08-15",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "创“芯”大赛",
+      "signupStart": "2026-03-20",
+      "signupEnd": "2026-06-30",
+      "submitStart": "2026-05-16",
+      "submitEnd": "2026-07-07",
+      "finalStart": "2026-08-13",
+      "finalEnd": "2026-08-17",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "人工智能创新大赛",
+      "signupStart": "2026-05-22",
+      "signupEnd": "2026-08-25",
+      "submitStart": "2026-05-22",
+      "submitEnd": "2026-09-01",
+      "finalStart": "2026-10-23",
+      "finalEnd": "2026-10-25",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "机器人创新设计大赛",
+      "signupStart": "2026-06-23",
+      "signupEnd": "2026-08-24",
+      "submitStart": "2026-06-23",
+      "submitEnd": "2026-08-25",
+      "finalStart": "2026-11-06",
+      "finalEnd": "2026-11-08",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "能源装备创新设计大赛",
+      "signupStart": "2026-06-25",
+      "signupEnd": "2026-08-15",
+      "submitStart": "2026-06-25",
+      "submitEnd": "2026-08-25",
+      "finalStart": "2026-10-16",
+      "finalEnd": "2026-10-18",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "公共管理案例大赛",
+      "signupStart": "2026-01-13",
+      "signupEnd": "2026-03-13",
+      "submitStart": "2026-01-13",
+      "submitEnd": "2026-03-31",
+      "finalStart": "2026-06-13",
+      "finalEnd": "2026-06-14",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "乡村振兴科技强农+创新大赛",
+      "signupStart": "",
+      "signupEnd": "",
+      "submitStart": "",
+      "submitEnd": "",
+      "finalStart": "",
+      "finalEnd": "",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "网络安全创新大赛",
+      "signupStart": "2026-06-18",
+      "signupEnd": "2026-10-18",
+      "submitStart": "2026-06-18",
+      "submitEnd": "2026-10-22",
+      "finalStart": "2026-12-25",
+      "finalEnd": "2026-12-27",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "“双碳”创新与创意大赛",
+      "signupStart": "2026-06-23",
+      "signupEnd": "2026-09-11",
+      "submitStart": "2026-06-23",
+      "submitEnd": "2026-09-13",
+      "finalStart": "2026-11-27",
+      "finalEnd": "2026-11-29",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "金融科技创新大赛",
+      "signupStart": "2026-05-22",
+      "signupEnd": "2026-08-17",
+      "submitStart": "2026-07-10",
+      "submitEnd": "2026-08-31",
+      "finalStart": "2026-10-30",
+      "finalEnd": "2026-11-01",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "“美丽中国”创新设计大赛",
+      "signupStart": "2026-06-20",
+      "signupEnd": "2026-08-20",
+      "submitStart": "2026-06-20",
+      "submitEnd": "2026-08-20",
+      "finalStart": "2026-10-30",
+      "finalEnd": "2026-11-01",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "企业管理创新大赛",
+      "signupStart": "2026-08-10",
+      "signupEnd": "2026-09-22",
+      "submitStart": "",
+      "submitEnd": "",
+      "finalStart": "2026-12-05",
+      "finalEnd": "2026-12-06",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "操作系统开源创新大赛",
+      "signupStart": "2026-05-15",
+      "signupEnd": "2026-07-28",
+      "submitStart": "2026-05-30",
+      "submitEnd": "2026-07-30",
+      "finalStart": "2026-10-15",
+      "finalEnd": "2026-10-17",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "“文化中国”两创大赛",
+      "signupStart": "2026-05-22",
+      "signupEnd": "2026-09-13",
+      "submitStart": "2026-05-22",
+      "submitEnd": "2026-09-13",
+      "finalStart": "2026-11-14",
+      "finalEnd": "2026-11-15",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "国际中文教育案例大赛",
+      "signupStart": "2026-06-01",
+      "signupEnd": "2026-06-30",
+      "submitStart": "2026-06-01",
+      "submitEnd": "2026-07-13",
+      "finalStart": "",
+      "finalEnd": "",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    },
+    {
+      "contest": "智能建造创新大赛",
+      "signupStart": "2026-05-18",
+      "signupEnd": "2026-08-20",
+      "submitStart": "2026-05-18",
+      "submitEnd": "2026-08-31",
+      "finalStart": "2026-11-26",
+      "finalEnd": "2026-11-28",
+      "sourceUrl": "https://cpipc.acge.org.cn/pw/notice/detail/2c9080179e403028019e484cf50210a6"
+    }
+  ]
+}

@@ -14,6 +14,8 @@ from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from typing import Dict, List, Optional
 
+from ..personas import AUDIENCES, STAGES, infer_audiences, normalize_contest
+
 CATEGORIES = ("报名参赛", "评审与名单", "决赛与收官", "赛事动态", "其他通知")
 URGENCIES = ("critical", "high", "normal", "low")
 EVENT_KINDS = ("deadline", "event", "notice", "other")
@@ -45,6 +47,11 @@ class AiAnalysis:
     confidence: float = 0.0
     version: str = ""
     fallback: bool = False  # True 表示来自规则降级，不是模型结果
+    # 以下为 v2 新增：赛事 / 阶段 / 人员视角 / 行动建议
+    contest: str = ""
+    stage: str = ""
+    audiences: List[str] = field(default_factory=list)
+    action: str = ""
 
     def to_dict(self) -> dict:
         d = asdict(self)
@@ -74,6 +81,10 @@ class AiAnalysis:
             confidence=_num(raw.get("confidence"), 0.0),
             version=str(raw.get("version") or ""),
             fallback=bool(raw.get("fallback")),
+            contest=str(raw.get("contest") or ""),
+            stage=str(raw.get("stage") or ""),
+            audiences=[str(a) for a in (raw.get("audiences") or []) if isinstance(a, str)][:4],
+            action=str(raw.get("action") or ""),
         )
 
 
@@ -244,6 +255,14 @@ def validate_response(payload, items: List[dict], version: str) -> Dict[str, dic
         if urgency not in URGENCIES:
             urgency = "normal"
 
+        stage = _text(row.get("stage"), 20)
+        if stage not in STAGES:
+            stage = ""
+        audiences = [a for a in (row.get("audiences") or []) if isinstance(a, str) and a in AUDIENCES][:4]
+        if not audiences and stage:
+            audiences = list(infer_audiences(stage, str(item.get("title") or "")))
+        contest = normalize_contest(_text(row.get("contest"), 60))
+
         analysis = AiAnalysis(
             uid=uid,
             category=category,
@@ -253,6 +272,10 @@ def validate_response(payload, items: List[dict], version: str) -> Dict[str, dic
             events=events,
             confidence=_num(row.get("confidence"), 0.0),
             version=version,
+            contest=contest,
+            stage=stage,
+            audiences=audiences,
+            action=_text(row.get("action"), 90),
         )
         out[uid] = analysis.to_dict()
     return out

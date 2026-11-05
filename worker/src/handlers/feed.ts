@@ -35,6 +35,10 @@ interface Notice {
   deadline: string;
   attachments?: Attachment[];
   changeKind?: 'new' | 'changed';
+  contest?: string;
+  stage?: string;
+  audiences?: string[];
+  action?: string;
   aiCategory?: string;
   aiSummary?: string;
   aiUrgency?: string;
@@ -44,15 +48,36 @@ interface Notice {
   aiVersion?: string;
 }
 
+/** 官方赛程表中的一项赛事（Python 端解析，日期均为 YYYY-MM-DD）。 */
+interface ContestSchedule {
+  contest: string;
+  signupStart: string;
+  signupEnd: string;
+  submitStart: string;
+  submitEnd: string;
+  finalStart: string;
+  finalEnd: string;
+  sourceUrl: string;
+}
+
 const URGENCIES = ['critical', 'high', 'normal', 'low'];
 const AI_CATEGORIES = ['报名参赛', '评审与名单', '决赛与收官', '赛事动态', '其他通知'];
 const EVENT_KINDS = ['deadline', 'event', 'notice', 'other'];
+const STAGES = ['报名', '资格审查', '缴费', '提交作品', '评审', '决赛', '公示', '获奖', '报销', '承办', '动态', '其他'];
+const AUDIENCES = ['student', 'advisor', 'admin', 'organizer'];
+const AUDIENCE_LABELS: Record<string, string> = {
+  student: '参赛学生',
+  advisor: '指导教师',
+  admin: '培养单位',
+  organizer: '分赛区 / 承办方',
+};
 
 interface FeedPayload {
   site?: string;
   baseUrl?: string;
   generatedAt?: string;
   notices?: unknown; // 运行期再校验是否为数组
+  schedule?: unknown;
 }
 
 /* ---------------------------- 通用清洗 ---------------------------- */
@@ -130,6 +155,10 @@ function normalizeNotice(raw: unknown): Notice | null {
 
   const aiCategory = trunc(asStr(o.aiCategory).trim(), 100);
   const aiUrgency = asStr(o.aiUrgency).trim();
+  const stage = asStr(o.stage).trim();
+  const audiences = Array.isArray(o.audiences)
+    ? o.audiences.map((a) => asStr(a).trim()).filter((a) => AUDIENCES.includes(a)).slice(0, 4)
+    : [];
   return {
     uid,
     title,
@@ -141,6 +170,10 @@ function normalizeNotice(raw: unknown): Notice | null {
     deadline: trunc(asStr(o.deadline).trim(), 20),
     attachments,
     changeKind,
+    contest: trunc(asStr(o.contest).trim(), 60),
+    stage: STAGES.includes(stage) ? stage : '',
+    audiences,
+    action: trunc(asStr(o.action).trim(), 90),
     aiCategory: AI_CATEGORIES.includes(aiCategory) ? aiCategory : '',
     aiSummary: trunc(asStr(o.aiSummary).trim(), 200),
     aiUrgency: URGENCIES.includes(aiUrgency) ? aiUrgency : '',
@@ -149,6 +182,36 @@ function normalizeNotice(raw: unknown): Notice | null {
     aiConfidence: asNum(o.aiConfidence),
     aiVersion: trunc(asStr(o.aiVersion).trim(), 40),
   };
+}
+
+/** 赛程白名单：只接受合法日期，非法行整条丢弃。 */
+function normalizeSchedule(raw: unknown): ContestSchedule[] {
+  if (!Array.isArray(raw)) return [];
+  const out: ContestSchedule[] = [];
+  for (const item of raw.slice(0, 40)) {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) continue;
+    const o = item as Record<string, unknown>;
+    const contest = trunc(asStr(o.contest).trim(), 60);
+    if (!contest) continue;
+    const day = (v: unknown): string => {
+      const s = asStr(v).trim();
+      return validDate(s) ? s : '';
+    };
+    const row: ContestSchedule = {
+      contest,
+      signupStart: day(o.signupStart),
+      signupEnd: day(o.signupEnd),
+      submitStart: day(o.submitStart),
+      submitEnd: day(o.submitEnd),
+      finalStart: day(o.finalStart),
+      finalEnd: day(o.finalEnd),
+      sourceUrl: safeUrl(trunc(asStr(o.sourceUrl).trim(), 500)),
+    };
+    // 一个日期都没有的赛程对日历没有意义，直接丢弃
+    if (!row.signupStart && !row.signupEnd && !row.submitEnd && !row.finalStart && !row.finalEnd) continue;
+    out.push(row);
+  }
+  return out;
 }
 
 /** 读 KV：读不到 / 解析失败都按空列表处理，绝不向外抛错。 */
@@ -162,6 +225,18 @@ async function loadNotices(env: Env): Promise<Notice[]> {
       .slice(0, 300)
       .map(normalizeNotice)
       .filter((n): n is Notice => n !== null);
+  } catch {
+    return [];
+  }
+}
+
+/** 读 KV 里的官方赛程（与通知同一条记录，减少一次 KV 读）。 */
+async function loadSchedule(env: Env): Promise<ContestSchedule[]> {
+  try {
+    const raw = await env.SUBS.get('feed:notices');
+    if (!raw) return [];
+    const data = JSON.parse(raw) as FeedPayload;
+    return normalizeSchedule(data.schedule);
   } catch {
     return [];
   }
@@ -237,22 +312,23 @@ export async function handleNoticesPost(req: Request, env: Env): Promise<Respons
   const notices = (payload.notices as unknown[])
     .map(normalizeNotice)
     .filter((n): n is Notice => n !== null);
+  const schedule = normalizeSchedule(payload.schedule);
   const site = asStr(payload.site).trim() || cfg.siteName;
   const baseUrl = asStr(payload.baseUrl).trim() || cfg.baseUrl;
   const generatedAt = asStr(payload.generatedAt).trim() || new Date().toISOString();
 
   try {
-    await env.SUBS.put('feed:notices', JSON.stringify({ site, baseUrl, generatedAt, notices }));
+    await env.SUBS.put('feed:notices', JSON.stringify({ site, baseUrl, generatedAt, notices, schedule }));
   } catch {
     return jsonResp({ ok: false, message: 'store failed' }, 500);
   }
-  return jsonResp({ ok: true, count: notices.length });
+  return jsonResp({ ok: true, count: notices.length, schedule: schedule.length });
 }
 
 /* ---------------------------- 2. 归档页 ---------------------------- */
 
 function archiveItem(n: Notice): string {
-  const meta = [n.date, n.category, n.source].filter(Boolean).map(esc).join(' · ');
+  const meta = [n.date, n.stage, n.category, n.source].filter(Boolean).map(esc).join(' · ');
   const updated = n.changeKind === 'changed' ? ' <span class="count">更新</span>' : '';
   const important = n.aiUrgency === 'critical' ? ' <span class="count">重要</span>' : '';
   const href = safeUrl(n.url);
@@ -260,6 +336,10 @@ function archiveItem(n: Notice): string {
   const link = href
     ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${title}</a>`
     : title;
+  const audience = (n.audiences || []).length
+    ? `<p class="sub">面向：${(n.audiences || []).map((a) => AUDIENCE_LABELS[a] || a).map(esc).join(' / ')}</p>`
+    : '';
+  const action = n.action ? `<p class="sub">要做什么：${esc(n.action)}</p>` : '';
   const events = (n.aiEvents || [])
     .map((e) => {
       const label = e.label || (e.kind === 'deadline' ? '截止' : '日程');
@@ -274,6 +354,8 @@ function archiveItem(n: Notice): string {
     <p class="sub">${meta}${updated}${important}</p>
     <p>${link}</p>
     ${aiSummary}
+    ${audience}
+    ${action}
     ${events}
     ${deadline}
   </div>`;
@@ -323,6 +405,11 @@ export async function handleFeed(env: Env): Promise<Response> {
         desc.push(`${label}：${e.date}${e.location ? `（${e.location}）` : ''}`);
       }
       if (!(n.aiEvents || []).length && n.deadline) desc.push(`截止 / 日程：${n.deadline}`);
+      if (n.stage) desc.push(`阶段：${n.stage}`);
+      if ((n.audiences || []).length) {
+        desc.push(`面向：${(n.audiences || []).map((a) => AUDIENCE_LABELS[a] || a).join(' / ')}`);
+      }
+      if (n.action) desc.push(`要做什么：${n.action}`);
       if (n.aiUrgency === 'critical') desc.push('【重要】');
       if (n.changeKind === 'changed') desc.push('【更新】该通知有更新');
       lines.push('<item>');
@@ -383,6 +470,26 @@ function seqOf(s: string): number {
   return Math.abs(h % 100000);
 }
 
+/** 写入一个 VALARM（全天事件按「当天 00:00 前 N 天」触发）。 */
+function pushAlarm(lines: string[], days: number, desc: string): void {
+  lines.push('BEGIN:VALARM');
+  lines.push(`TRIGGER:-P${days}D`);
+  lines.push('ACTION:DISPLAY');
+  lines.push(`DESCRIPTION:${icalEsc(desc)}`);
+  lines.push('END:VALARM');
+}
+
+/** 赛程字段 → 日历标签；deadline 类型才加提醒。 */
+function scheduleEntries(s: ContestSchedule): Array<{ date: string; label: string; deadline: boolean }> {
+  return [
+    { date: s.signupStart, label: '报名开始', deadline: false },
+    { date: s.signupEnd, label: '报名截止', deadline: true },
+    { date: s.submitEnd, label: '提交作品截止', deadline: true },
+    { date: s.finalStart, label: '决赛开始', deadline: false },
+    { date: s.finalEnd, label: '决赛结束', deadline: false },
+  ];
+}
+
 export async function handleCalendar(env: Env): Promise<Response> {
   const headers = cacheableHeaders('text/calendar;charset=utf-8', {
     'Content-Disposition': 'inline; filename="yds-notices.ics"',
@@ -390,8 +497,10 @@ export async function handleCalendar(env: Env): Promise<Response> {
   try {
     const cfg = getConfig(env);
     const notices = await loadNotices(env);
+    const schedule = await loadSchedule(env);
     const stamp = utcStamp(new Date());
     const host = hostOf(cfg.baseUrl);
+    const seenUid = new Set<string>();
     const lines: string[] = [
       'BEGIN:VCALENDAR',
       'VERSION:2.0',
@@ -401,6 +510,36 @@ export async function handleCalendar(env: Env): Promise<Response> {
       `X-WR-CALNAME:${icalEsc(`${cfg.siteName}日历`)}`,
       'X-WR-TIMEZONE:Asia/Shanghai',
     ];
+
+    // 1) 官方赛程：把所有已配置赛事的报名 / 提交 / 决赛节点提前放进日历，
+    //    这样即使官网几个月不发新通知，订阅者也能看到关键时间。
+    for (const s of schedule) {
+      for (const item of scheduleEntries(s)) {
+        const start = dateCompact(item.date);
+        if (!start) continue;
+        const uid = `schedule:${s.contest}:${item.label}:${item.date}@${host}`;
+        if (seenUid.has(uid)) continue;
+        seenUid.add(uid);
+        const summary = `【${item.label}】${s.contest}`;
+        lines.push('BEGIN:VEVENT');
+        lines.push(`UID:${icalEsc(uid)}`);
+        lines.push(`DTSTAMP:${stamp}`);
+        lines.push(`DTSTART;VALUE=DATE:${start}`);
+        lines.push(`DTEND;VALUE=DATE:${nextDay(start)}`);
+        lines.push(`SUMMARY:${icalEsc(summary)}`);
+        if (s.sourceUrl) lines.push(`URL:${s.sourceUrl}`);
+        lines.push(`DESCRIPTION:${icalEsc(`官方赛程：${s.contest}｜${item.label}｜${item.date}\n请以研创网最新通知为准。`)}`);
+        lines.push(`SEQUENCE:${seqOf(`${s.contest}|${item.label}|${item.date}`)}`);
+        lines.push('TRANSP:TRANSPARENT');
+        if (item.deadline) {
+          pushAlarm(lines, 7, `${s.contest}：${item.label}还有 7 天`);
+          pushAlarm(lines, 1, `${s.contest}：${item.label}明天到期`);
+        }
+        lines.push('END:VEVENT');
+      }
+    }
+
+    // 2) 通知正文里抽出的真实事件日
     for (const n of notices) {
       // 优先用 AI 从公告正文抽出的真实事件日；没有时才回退到规则 deadline 或发布日期。
       // 一条公告有多个时间节点（报名截止 + 决赛 + 公示期）就生成多个 VEVENT。
@@ -417,8 +556,9 @@ export async function handleCalendar(env: Env): Promise<Response> {
       }
       if (!pairs.length) continue;
 
+      const stageTag = n.stage && n.stage !== '其他' ? `【${n.stage}】` : '';
       const base = `${n.changeKind === 'changed' ? '【更新】' : ''}`
-        + `${n.aiUrgency === 'critical' ? '【重要】' : ''}[${n.category}] ${n.title}`;
+        + `${n.aiUrgency === 'critical' ? '【重要】' : ''}${stageTag}[${n.category}] ${n.title}`;
       const descParts = [n.aiSummary || n.summary];
       if (n.source) descParts.push(`来源：${n.source}`);
       const href = safeUrl(n.url);
@@ -440,6 +580,11 @@ export async function handleCalendar(env: Env): Promise<Response> {
         lines.push(`DESCRIPTION:${icalEsc(parts.filter(Boolean).join('\n'))}`);
         lines.push(`SEQUENCE:${seqOf(`${n.uid}|${start}|${ev?.label}|${ev?.evidence}|${n.aiSummary}`)}`);
         lines.push('TRANSP:TRANSPARENT');
+        // 截止类事件给 -3 天 / -1 天提醒（全天事件由客户端按当地时区触发）
+        if (ev?.kind === 'deadline') {
+          pushAlarm(lines, 3, `${n.title}：${ev.label || '截止'}还有 3 天`);
+          pushAlarm(lines, 1, `${n.title}：${ev.label || '截止'}明天到期`);
+        }
         lines.push('END:VEVENT');
       });
     }

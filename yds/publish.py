@@ -98,18 +98,22 @@ def extract_deadline(notice: Notice) -> str:
     return ""
 
 
-def _fallback_event(date_str: str) -> dict:
+def _fallback_event(date_str: str, stage: str = "") -> dict:
     return {
         "date": date_str,
         "evidence": "",
-        "label": "截止 / 日程",
+        "label": f"{stage}截止" if stage in ("报名", "提交作品", "缴费") else "截止 / 日程",
         "kind": "deadline",
         "location": "",
         "confidence": 0.0,
     }
 
 
-def build_payload(notices: Sequence[Notice], limit: int = 200) -> dict:
+def build_payload(
+    notices: Sequence[Notice],
+    limit: int = 200,
+    schedule: Sequence[dict] | None = None,
+) -> dict:
     def event_day(n: Notice) -> str:
         if n.ai_events:
             return str(n.ai_events[0].get("date") or "")
@@ -122,18 +126,22 @@ def build_payload(notices: Sequence[Notice], limit: int = 200) -> dict:
             n.deadline = extract_deadline(n)
         # AI 关闭或失败时，用规则抽出的日期生成一个等价事件，日历不会退回发布日期
         if not n.ai_events and n.deadline:
-            n.ai_events = [_fallback_event(n.deadline)]
+            n.ai_events = [_fallback_event(n.deadline, n.stage)]
         items.append(n.to_feed_item())
-    return {
+    payload = {
         "site": settings.site_name,
         "baseUrl": settings.public_base_url,
         "generatedAt": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "notices": items,
     }
+    if schedule:
+        # 官方赛程单独成段：日历据此提前展示「报名截止 / 提交截止 / 决赛」
+        payload["schedule"] = list(schedule)
+    return payload
 
 
 def payload_fingerprint(payload: dict) -> str:
-    """AI 结果变化也要触发重推，否则日历事件日更新后线上不会刷新。"""
+    """AI 结果、人员视角或赛程变化都要触发重推，否则线上不会刷新。"""
     rows = []
     for i in payload.get("notices", []):
         events = [[e.get("date"), e.get("label"), e.get("kind")]
@@ -142,8 +150,14 @@ def payload_fingerprint(payload: dict) -> str:
             i.get("uid"), i.get("title"), i.get("date"), i.get("deadline"),
             i.get("changeKind"), i.get("aiCategory"), i.get("aiSummary"),
             i.get("aiUrgency"), events,
+            i.get("contest"), i.get("stage"), i.get("audiences"), i.get("action"),
         ])
-    raw = json.dumps(rows, ensure_ascii=False, sort_keys=True)
+    sched = sorted(
+        (str(s.get("contest") or ""), str(s.get("signupEnd") or ""),
+         str(s.get("submitEnd") or ""), str(s.get("finalStart") or ""))
+        for s in (payload.get("schedule") or []) if isinstance(s, dict)
+    )
+    raw = json.dumps([rows, sched], ensure_ascii=False, sort_keys=True)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24]
 
 
@@ -229,5 +243,14 @@ def apply_analysis(notice: Notice, analysis: dict | None) -> None:
     notice.ai_confidence = a.confidence
     notice.ai_version = a.version
     notice.ai_events = [e.__dict__ for e in a.events]
+    # 视角字段：模型给了就覆盖规则推断，没给则保留 __post_init__ 的规则结果
+    if a.contest:
+        notice.contest = a.contest
+    if a.stage:
+        notice.stage = a.stage
+    if a.audiences:
+        notice.audiences = list(a.audiences)
+    if a.action:
+        notice.action = a.action
     if a.events and not notice.deadline:
         notice.deadline = a.events[0].date

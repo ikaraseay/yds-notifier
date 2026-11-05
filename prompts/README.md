@@ -10,13 +10,14 @@ prompts/
 ├── README.md                     # 本文件：规范与流程
 ├── manifest.yaml                 # 版本注册表：文件指针 + 输出 schema + changelog
 ├── notices/
-│   ├── v1.system.md              # 系统提示词（角色、任务、约束、输出 JSON）
-│   └── v1.user.md                # 用户模板（只含变量占位符与输入/输出示例骨架）
+│   ├── v1.system.md / v1.user.md # 初版：分类 / 摘要 / 紧急度 / 事件日期
+│   └── v2.system.md / v2.user.md # 当前版：另加赛事 / 阶段 / 人群 / 行动建议
 ├── digest/
 │   └── v1.system.md              # 摘要邮件导语（预留，尚未启用）
 └── schemas/
-    ├── analysis.schema.json      # 输出契约（JSON Schema draft-07）
-    └── examples.json             # few-shot / 回归样本（离线测试用）
+    ├── analysis.schema.json      # v1 输出契约
+    ├── analysis.v2.schema.json   # v2 输出契约（draft-07）
+    └── examples.v2.json          # 回归样本（离线测试用）
 ```
 
 - **一个提示词一个版本目录**：新增版本写 `v2.system.md`，改 `manifest.yaml` 的 `active` 指向它；
@@ -29,9 +30,18 @@ prompts/
 ## 输出契约
 
 模型必须输出严格 JSON，形如 `{"notices": [...]}`。完整字段与类型见
-`schemas/analysis.schema.json`。运行时由 `yds/ai/schema.py` 做二次校验，
+`schemas/analysis.v2.schema.json`。运行时由 `yds/ai/schema.py` 做二次校验，
 **模型提议、代码决定**：日期只以原文片段（`events[].evidence`）形式给出，
 由确定性代码校验该片段确实存在并归一化成 `YYYY-MM-DD`，模型不做任何日期换算。
+
+v2 额外要求的四个字段：
+
+| 字段 | 枚举来源 | 非法值处理 |
+|---|---|---|
+| `contest` | `yds/personas.py` 的 `CONTESTS` | 归一化失败 → 置空，回退标题规则 |
+| `stage` | `yds/personas.py` 的 `STAGES` | 不在枚举内 → 置空，回退关键词规则 |
+| `audiences` | `student` / `advisor` / `admin` / `organizer` | 过滤非法值；全空 → 按阶段推断 |
+| `action` | 自由文本（≤90 字） | 超长截断；为空则用阶段模板句 |
 
 ## 修改流程
 

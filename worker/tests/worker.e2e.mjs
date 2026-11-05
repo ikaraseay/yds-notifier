@@ -771,5 +771,78 @@ const check = (name, cond, extra = "") => {
   check("重复同步不产生重复事件",
     (ics2.match(/BEGIN:VEVENT/g) || []).length === 4);
 
+  console.log("\n[32] 人员视角字段与官方赛程");
+
+  const personaPayload = {
+    site: "研电赛通知订阅",
+    baseUrl: "https://yds.workers.dev",
+    notices: [
+      {
+        uid: "p1",
+        title: "关于报名截止的通知",
+        url: "https://cpipc.acge.org.cn/x/p1",
+        date: "2026-11-01",
+        category: "报名参赛",
+        source: "研创网",
+        summary: "",
+        deadline: "2026-11-25",
+        contest: "电子设计竞赛",
+        stage: "报名",
+        audiences: ["student", "advisor", "hacker"],
+        action: "<b>在 11 月 25 日前完成报名</b>",
+        aiUrgency: "high",
+        aiEvents: [
+          {
+            date: "2026-11-25", evidence: "11月25日", label: "报名截止",
+            kind: "deadline", location: "", confidence: 0.9,
+          },
+        ],
+      },
+    ],
+    schedule: [
+      {
+        contest: "电子设计竞赛",
+        signupStart: "2026-04-03",
+        signupEnd: "2026-11-25",
+        submitStart: "",
+        submitEnd: "",
+        finalStart: "2026-12-01",
+        finalEnd: "2026-12-03",
+        sourceUrl: "https://cpipc.acge.org.cn/x/schedule",
+      },
+      {
+        contest: "非法赛事",
+        signupEnd: "not-a-date",
+      },
+    ],
+  };
+
+  r = await call("/api/notices", {
+    method: "POST", body: JSON.stringify(personaPayload),
+    headers: { Authorization: "Bearer admin-secret" },
+  });
+  check("视角与赛程同步 200", r.status === 200, r.text.slice(0, 120));
+  check("返回合法赛程数", r.text.includes('"schedule":1'), r.text.slice(0, 200));
+
+  r = await call("/archive");
+  check("归档显示阶段", r.text.includes("报名"), r.text.slice(0, 200));
+  check("归档显示人群", r.text.includes("面向：参赛学生 / 指导教师"));
+  check("非法人群被丢弃", !r.text.includes("hacker"));
+  check("归档显示行动建议", r.text.includes("要做什么："));
+  check("行动建议被转义", r.text.includes("&lt;b&gt;") && !r.text.includes("<b>在 11 月"));
+
+  r = await call("/calendar.ics");
+  const ics3 = r.text;
+  check("赛程生成报名截止事件", ics3.includes("【报名截止】电子设计竞赛"));
+  check("赛程生成决赛事件", ics3.includes("【决赛开始】电子设计竞赛"));
+  check("赛程 UID 稳定前缀", ics3.includes("UID:schedule:电子设计竞赛:"));
+  check("非法赛程日期被丢弃", !ics3.includes("not-a-date"));
+  check("截止事件带 7 天提醒", ics3.includes("TRIGGER:-P7D"));
+  check("截止事件带 1 天提醒", ics3.includes("TRIGGER:-P1D"));
+  check("通知截止事件带 3 天提醒", ics3.includes("TRIGGER:-P3D"));
+  check("SUMMARY 带阶段标签", ics3.includes("【报名】[报名参赛]"));
+  check("VALARM 结构完整", (ics3.match(/BEGIN:VALARM/g) || []).length
+    === (ics3.match(/END:VALARM/g) || []).length);
+
   console.log(`\n结果：${pass} 项通过${process.exitCode ? "，存在失败" : "，全部通过"}`);
 })();
