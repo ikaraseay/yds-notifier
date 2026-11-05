@@ -112,7 +112,7 @@ const env = {
   MAIL_FROM_NAME: "研电赛通知",
   MAIL_TO: "admin@qq.com",
   UNSUB_TTL_DAYS: "180",
-  MAX_PER_IP_HOUR: "3",
+  MAX_PER_IP_HOUR: "10",
   MAX_CONFIRM_PER_DAY: "60",
   LIST_RATE_PER_HOUR: "60",
   // Bindings
@@ -280,15 +280,15 @@ const check = (name, cond, extra = "") => {
   check("立刻重发被拦 429", r.status === 429, `${r.status} ${r.text}`);
   check("提示去查收件箱", r.text.includes("刚发过"));
 
-  console.log("\n[12] IP 限流（每 IP 每小时 3 次）");
+  console.log("\n[12] IP 限流（每 IP 每小时 10 次）");
   const ip = "7.7.7.7";
   const results = [];
-  for (let i = 0; i < 4; i++) {
+  for (let i = 0; i < 11; i++) {
     const rr = await post("/api/login", { email: `x${i}@qq.com` }, ip);
     results.push(rr.status);
   }
-  check("前 3 次放行", results.slice(0, 3).every((s) => s === 200), results.join(","));
-  check("第 4 次 429", results[3] === 429, results[3]);
+  check("前 10 次放行", results.slice(0, 10).every((s) => s === 200), results.join(","));
+  check("第 11 次 429", results[10] === 429, results[10]);
 
   console.log("\n[13] 全局每日熔断");
   const fresh = { ...env, RATE: new MockDO(), SUBS: new MockKV(), MAX_CONFIRM_PER_DAY: "1" };

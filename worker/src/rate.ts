@@ -22,7 +22,7 @@ export class RateLimiter {
           ? input.toString()
           : (input as Request).url;
     const url = new URL(raw);
-    const limit = Number(url.searchParams.get("limit") || 3);
+    const limit = Number(url.searchParams.get("limit") || 10);
     const windowSec = Number(url.searchParams.get("window") || 3600);
     const now = Date.now();
 
