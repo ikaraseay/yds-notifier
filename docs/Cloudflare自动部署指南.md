@@ -109,7 +109,7 @@ custom_domain = true
 | `CUSTOM_DOMAIN` | `notice.example.com` | 否 | 自定义域名，纯 hostname。填了即自动作为对外地址 |
 | `WORKERS_DEV_URL` | `https://yds-unsubscribe.xxx.workers.dev` | 否（无自定义域时必填） | 兜底地址 + CSRF 白名单 |
 | `PUBLIC_BASE_URL` | 留空 | 否 | 高级覆盖，一般不用填 |
-| `MAIL_FROM_ADDRESS` | `notice@your-domain.com` | **是** | 纯地址，Resend 已验证域名 |
+| `MAIL_FROM_ADDRESS` | `notice@meovo.cc` | **是** | 纯地址，属于 Resend 已验证域名；**与 `CUSTOM_DOMAIN` 无关**，站点用子域、发件用根域是允许的 |
 | `MAIL_TO` | `you@qq.com` | **是** | 站长邮箱 |
 | `MAIL_FROM_NAME` | `研电赛通知` | 否 | 发件人显示名 |
 | `SITE_NAME` | `研电赛通知订阅` | 否 | 页面/邮件标题 |
@@ -171,7 +171,7 @@ custom_domain = true
 1. `UNSUB_SECRET`：两边完全一致（不一致 → 退订链接全部 400）
 2. `SUBSCRIBE_API_TOKEN`：两边同名同值（不一致 → Actions 拉名单 401）
 3. `CUSTOM_DOMAIN`：两边同值；若 GitHub 侧用了显式 `PUBLIC_BASE_URL`，必须与 Cloudflare 的对外地址一致
-4. `MAIL_FROM_ADDRESS` 属于 Resend 已验证域名；与 `CUSTOM_DOMAIN` 用同一主域可提升送达率
+4. `MAIL_FROM_ADDRESS` 属于 Resend 已验证域名。发件域名与 `CUSTOM_DOMAIN` **不必相同**：本项目站点在 `notice.yds.meovo.cc`（子域），发件用 `notice@meovo.cc`（根域），只要 Resend 验证的是 `meovo.cc` 即可。改完 `.env` 用 `python3 scripts/sync-secrets.py` 一次同步两端
 
 ---
 
