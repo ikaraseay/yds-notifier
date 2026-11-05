@@ -1,6 +1,127 @@
 {
-  "version": 1,
-  "updated_at": "",
-  "count": 0,
-  "seen": {}
+  "count": 20,
+  "seen": {
+    "0aaf1306b59a8627": {
+      "date": "2026-08-10",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "倒计时1天丨第二十一届研电赛全国总决赛即将开幕！",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c90801a9fd0d9b1019fe5a08fd42f04"
+    },
+    "16b76e1a09efde9c": {
+      "date": "2026-08-06",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "三十载薪火相传 华中赛区竞锋芒——第二十一届研电赛华中赛区决赛在湘潭大学圆满落幕",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c9080179fd4b645019fd5ab7f16036c"
+    },
+    "200d47de255ccf65": {
+      "date": "2026-05-12",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "第二十一届中国研究生电子设计竞赛组委会发布页",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c9080179dcfa227019e1b1de2c05e14"
+    },
+    "3ad699fa7d9cbc92": {
+      "date": "2026-08-13",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "第二十一届中国研究生电子设计竞赛全国总决赛获奖名单公布",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c90801a9ff2ac62019ff4e79d7308e8"
+    },
+    "3c0a9ec19dc3a3df": {
+      "date": "2026-08-05",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "倒计时6天丨第二十一届研电赛全国总决赛即将开幕！",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c90801c9fcf0b43019fd00eeb960275"
+    },
+    "45a311477eacf32e": {
+      "date": "2026-08-04",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "倒计时7天丨第二十一届研电赛全国总决赛即将开幕！",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c9080199fca3dbe019fcb5fe2da02d5"
+    },
+    "4c812f13639d9c8a": {
+      "date": "2026-08-07",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "倒计时4天丨第二十一届研电赛全国总决赛即将开幕！",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c9080189fcb9744019fdadba62126b2"
+    },
+    "50939e6f53188170": {
+      "date": "2026-09-08",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "大学计划丨兆易创新命题闪耀第 21 届全国研电赛，九载同行共筑青年创新生态",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c90801ca06f016101a07ed02fb870b2"
+    },
+    "63dbeb76e9cbc8a2": {
+      "date": "2026-04-21",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "第二十一届中国研究生电子设计竞赛技术类竞赛赛题集锦",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c9080189d9063ff019daed383863560"
+    },
+    "6772848a04947ee0": {
+      "date": "2026-03-24",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "第二十一届中国研究生电子设计竞赛附件下载",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c9080189cfe726d019d1db7c4581f63"
+    },
+    "67faf70f1ff39b22": {
+      "date": "2026-08-09",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "倒计时2天丨第二十一届研电赛全国总决赛即将开幕！",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c9080189fcb9744019fdb0a927d2792"
+    },
+    "7e9bf37a6c6e58bc": {
+      "date": "2026-08-04",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "第二十一届中国研究生电子设计竞赛华东赛区决赛在安徽大学圆满落幕",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c9080199fca3dbe019fcb5660ea02c9"
+    },
+    "87304963f61b6945": {
+      "date": "2026-08-17",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "第二十一届研电赛初赛获奖名单汇总",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c90801b9ffedd5801a00e6fd8c745c0"
+    },
+    "ba3dd23a8504fb60": {
+      "date": "2026-08-13",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "第二十一届研电赛全国总决赛在桐乡开幕",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c90801a9ff6ef07019ff91fa432048f"
+    },
+    "be98804837a1bd7d": {
+      "date": "2026-08-15",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "第二十一届中国研究生电子设计竞赛全国总决赛在桐乡圆满落幕",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c90801c9ffdef3801a0039096fa1e69"
+    },
+    "d5fbb3aff72c0244": {
+      "date": "2026-08-06",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "倒计时5天丨第二十一届研电赛全国总决赛即将开幕！",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c9080179fd4b645019fd51aa2f301a9"
+    },
+    "e2ad64f4fe2465b0": {
+      "date": "2026-08-08",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "倒计时3天丨第二十一届研电赛全国总决赛即将开幕！",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c9080189fcb9744019fdb0409ba276a"
+    },
+    "e9c5febda81286f3": {
+      "date": "2026-08-25",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "【发票开具】第二十一届研电赛自助开票通道将于9月1日起开启",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c90801aa02a2c2901a037a1f59347ee"
+    },
+    "eb82363e6f34876b": {
+      "date": "2026-09-21",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "第二十一届研电赛报销所需相关文件",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c908017a0c0f0a801a0c1f0ea1d0804"
+    },
+    "fd8b3e65500d0876": {
+      "date": "2026-05-11",
+      "notified": "2026-11-05T09:17:38+00:00",
+      "title": "第二十一届中国研究生电子设计竞赛分赛区资讯发布页",
+      "url": "https://cpipc.acge.org.cn/cw/contestNews/detail/6/2c9080179dcfa227019e1b3766435ecb"
+    }
+  },
+  "updated_at": "2026-11-05T17:17:38+08:00",
+  "version": 1
 }
