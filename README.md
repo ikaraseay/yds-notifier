@@ -101,7 +101,7 @@
 | 订阅中心 | Cloudflare Workers · TypeScript · esbuild · Wrangler |
 | 状态存储 | Workers KV（账号 / 订阅 / 会话） · Durable Objects（限流） |
 | 部署 | Cloudflare Workers Builds · Custom Domains |
-| 质量保障 | `yds.selftest`（55 项，FAIL 返回非零） · Worker e2e（142 项） · `tsc --noEmit` · Wrangler dry-run |
+| 质量保障 | `yds.selftest`（58 项，FAIL 返回非零） · Worker e2e（142 项） · `tsc --noEmit` · Wrangler dry-run |
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
