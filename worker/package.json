@@ -1,0 +1,24 @@
+{
+  "name": "yds-unsubscribe",
+  "version": "2.1.0",
+  "private": true,
+  "type": "module",
+  "description": "研电赛通知订阅中心 —— 界面与后端逻辑分层，由 Cloudflare Workers Builds 自动构建部署",
+  "scripts": {
+    "sync-config": "node scripts/sync-config.mjs",
+    "build": "esbuild src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/index.js --minify --legal-comments=none",
+    "build:test": "esbuild src/index.ts --bundle --format=esm --platform=neutral --target=es2022 --outfile=dist/worker.test.mjs --legal-comments=none",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build:test && node tests/worker.e2e.mjs",
+    "check": "npm run typecheck && npm test",
+    "dev": "npm run sync-config && npm run build && wrangler dev",
+    "deploy": "npm run sync-config && npm run build && wrangler deploy",
+    "tail": "wrangler tail"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241106.0",
+    "esbuild": "^0.24.0",
+    "typescript": "^5.6.0",
+    "wrangler": "^3.90.0"
+  }
+}

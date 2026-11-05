@@ -1,0 +1,102 @@
+name: 研电赛通知推送
+
+on:
+  # 每 10 分钟检查一次（UTC；*/10 在两个时区下都是每 10 分钟）
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "运行模式"
+        required: false
+        default: normal
+        type: choice
+        options:
+          - normal    # 正常抓取 + 发信
+          - check     # 只抓取打印，不发信、不写状态
+
+# 顶层不授予任何权限，收敛到具体 job
+permissions: {}
+
+# 上一轮没跑完时不并发，避免两次运行同时改状态文件
+concurrency:
+  group: yds-notify
+  cancel-in-progress: false
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write   # 仅用于把 data/seen.json 提交回仓库去重
+    steps:
+      - name: 检出仓库
+        uses: actions/checkout@v4
+
+      - name: 安装 Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: 安装依赖
+        run: pip install -r requirements.txt
+
+      # 不联网的契约自测：退订签名格式、收件人校验、配置读取
+      - name: 配置与签名自测
+        run: python -m yds.selftest
+
+      # 配置统一由 .env（本地）/ GitHub Secrets（CI）注入，仓库内不含任何密钥。
+      # 完整清单见 .env.example 的「CI」标注项。
+      - name: 抓取通知并发送邮件
+        env:
+          # 域名单一事实源：一般只填 CUSTOM_DOMAIN（与 Cloudflare 同名同值），
+          # UNSUB_URL / SUBSCRIBE_API_URL 会自动派生；WORKERS_DEV_URL 是未绑域名时的兜底。
+          CUSTOM_DOMAIN: ${{ secrets.CUSTOM_DOMAIN }}
+          WORKERS_DEV_URL: ${{ secrets.WORKERS_DEV_URL }}
+          PUBLIC_BASE_URL: ${{ secrets.PUBLIC_BASE_URL }}
+          MAIL_PROVIDER: ${{ secrets.MAIL_PROVIDER || 'resend' }}
+          MAIL_FROM_ADDRESS: ${{ secrets.MAIL_FROM_ADDRESS }}
+          MAIL_FROM_NAME: ${{ secrets.MAIL_FROM_NAME || '研电赛通知' }}
+          MAIL_TO: ${{ secrets.MAIL_TO }}
+          REPLY_TO: ${{ secrets.REPLY_TO }}
+          SITE_NAME: ${{ secrets.SITE_NAME || '研电赛通知订阅' }}
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST || 'smtp.qq.com' }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT || '465' }}
+          SMTP_SECURITY: ${{ secrets.SMTP_SECURITY || 'ssl' }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASSWORD: ${{ secrets.SMTP_PASSWORD }}
+          # 下面两个 URL 是「可选覆盖」：旧部署若已单独填过会优先生效，新部署不用填
+          UNSUB_URL: ${{ secrets.UNSUB_URL }}
+          SUBSCRIBE_API_URL: ${{ secrets.SUBSCRIBE_API_URL }}
+          UNSUB_SECRET: ${{ secrets.UNSUB_SECRET }}
+          UNSUB_TTL_DAYS: ${{ secrets.UNSUB_TTL_DAYS || '180' }}
+          SUBSCRIBE_API_TOKEN: ${{ secrets.SUBSCRIBE_API_TOKEN }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          TZ: Asia/Shanghai
+        run: |
+          MODE="${{ github.event.inputs.mode || 'normal' }}"
+          if [ "$MODE" = "check" ]; then
+            python -m yds --check
+          else
+            python -m yds
+          fi
+
+      # 把去重状态提交回仓库，下次运行才知道发过什么
+      - name: 保存去重状态
+        if: always() && github.event.inputs.mode != 'check'
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/seen.json
+          if git status --porcelain data/seen.json | grep -q .; then
+            git commit -m "chore: 更新已推送通知记录 [skip ci]"
+            for i in 1 2 3; do
+              git pull --rebase --autostash origin ${GITHUB_REF_NAME} || true
+              if git push origin HEAD:${GITHUB_REF_NAME}; then break; fi
+              echo "推送失败，重试第 $i 次"; sleep 5
+            done
+          else
+            echo "状态无变化，跳过提交"
+          fi
