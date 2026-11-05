@@ -1,0 +1,29 @@
+# ============================================================================
+# wrangler dev 本地调试配置
+#   cp .dev.vars.example .dev.vars  然后填真实值（已被 .gitignore 忽略）
+#
+# Wrangler 只会读取与 wrangler.toml 同目录的 .dev.vars / .env，
+# 仓库根目录的 .env 不会自动生效，所以本地调试需要这个文件。
+# 变量含义与去处见根目录 .env.example。
+# ============================================================================
+
+# --- 域名（本地显式覆盖，优先于 CUSTOM_DOMAIN）---
+PUBLIC_BASE_URL="http://localhost:8787"
+CUSTOM_DOMAIN=""
+WORKERS_DEV_URL=""
+
+# --- Secrets ---
+UNSUB_SECRET="replace-with-32-byte-random-hex"
+UNSUB_SECRET_PREVIOUS=""
+RESEND_API_KEY="re_xxxxxxxxxxxxxxxxxxxxxxxx"
+SUBSCRIBE_API_TOKEN="replace-with-another-32-byte-random-hex"
+
+# --- Variables ---
+SITE_NAME="研电赛通知订阅"
+MAIL_FROM_ADDRESS="notice@your-domain.com"
+MAIL_FROM_NAME="研电赛通知"
+MAIL_TO="you@qq.com"
+UNSUB_TTL_DAYS="180"
+MAX_PER_IP_HOUR="3"
+MAX_CONFIRM_PER_DAY="200"
+LIST_RATE_PER_HOUR="60"

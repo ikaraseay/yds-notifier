@@ -1,0 +1,42 @@
+name = "yds-unsubscribe"
+main = "dist/index.js"
+compatibility_date = "2024-11-01"
+
+# 绑定自定义域名后 Cloudflare 默认会关闭 workers.dev，这里显式保留两个入口，
+# 方便 DNS 生效前过渡、以及出问题时回退排错。
+workers_dev = true
+
+# ---------------------------------------------------------------------------
+# 构建产物：npm run build 用 esbuild 把 src/（界面 + 后端逻辑）打成单文件。
+# Cloudflare Workers Builds（Settings > Build）里这样填：
+#   Root directory  : worker
+#   Build command   : npm ci && npm run sync-config && npm run build
+#   Deploy command  : npx wrangler deploy
+#   Build variables : KV_SUBS_ID（必填）、CUSTOM_DOMAIN（用自定义域名时填）
+# 本地部署：npm run deploy（= sync-config + build + wrangler deploy）
+#
+# sync-config 会把 .env / 构建变量里的自定义域名与 KV id 同步到下方 AUTO-CONFIG 区块：
+#   CUSTOM_DOMAIN=notice.example.com  → 生成 [[routes]] custom_domain = true
+#   CUSTOM_DOMAIN=none                → 关闭自定义域名，仅用 workers.dev
+# 运行时变量不在这里，必须填 Dashboard > Settings > Variables and Secrets。
+# ---------------------------------------------------------------------------
+
+[[kv_namespaces]]
+binding = "SUBS"
+# --- BEGIN AUTO-CONFIG (由 npm run sync-config 生成，勿手动修改) ---
+id = "REPLACE_WITH_YOUR_KV_ID"
+
+[[routes]]
+pattern = "notice.yds.meovo.cc"
+custom_domain = true
+# --- END AUTO-CONFIG ---
+
+# 限流计数器需要原子写，走 Durable Object 避开 KV 免费版每日 1000 次写配额
+[[durable_objects.bindings]]
+name = "RATE"
+class_name = "RateLimiter"
+
+# 免费版只支持 SQLite 后端，必须声明 new_sqlite_classes
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["RateLimiter"]
