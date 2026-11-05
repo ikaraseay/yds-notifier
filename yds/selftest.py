@@ -18,10 +18,15 @@ import time
 from datetime import date
 from pathlib import Path
 
+from .ai.analyzer import analyze_notices
+from .ai.cache import AiCache
+from .ai.client import AiClient, AiClientError, AiConfig
+from .ai.prompts import load_examples, load_prompt, load_schema, render, user_payload
+from .ai.schema import CATEGORIES, input_hash, parse_evidence_date, validate_response
 from .config import derive_base_url, derive_internal_base, settings
-from .mailer import build_html, build_text
+from .mailer import build_html, build_subject, build_text
 from .models import Attachment, Notice
-from .publish import build_payload, extract_deadline, payload_fingerprint
+from .publish import apply_analysis, build_payload, extract_deadline, payload_fingerprint
 from .recipients import Recipient, _valid
 from .state import State, load_pending, pending_notices, save_pending
 from .unsub import build_list_unsubscribe_headers, build_unsubscribe_url, make_email_token
@@ -200,6 +205,174 @@ def main() -> int:
     check("主流程中存在归档同步调用", sync_at > 0)
     check("同步位于无新公告提前返回之前", 0 < sync_at < early_at)
     check("同步结果会写入状态指纹", "archive_changed = True" in src)
+
+    print("\n[11] 提示词目录与输出契约")
+    spec = load_prompt("notices")
+    check("提示词版本 = v1", spec.version == "v1", spec.version)
+    check("system 含 json（DeepSeek 前置条件）", "json" in spec.system.lower())
+    check("system 声明不可信数据", "不可信" in spec.system)
+    check("system 禁止模型换算日期", "换算" in spec.system and "原样复制" in spec.system)
+    check("system 禁止把发布日期当事件日", "发布日期" in spec.system and "禁止" in spec.system)
+    check("模板变量替换", render("今天 {{today}} / {{uid}}", today="2026-11-06", uid="u1")
+          == "今天 2026-11-06 / u1")
+    try:
+        render("缺少 {{missing}}")
+        check("缺变量时报错", False)
+    except Exception:
+        check("缺变量时报错", True)
+    schema = load_schema(spec)
+    check("schema 是 draft-07 对象", schema.get("type") == "object"
+          and "draft-07" in str(schema.get("$schema")))
+    check("schema 分类白名单与代码一致",
+          set(schema["properties"]["notices"]["items"]["properties"]["category"]["enum"])
+          == set(CATEGORIES))
+    check("user 模板渲染出输入", "u-abc" in user_payload(
+        spec, [{"uid": "u-abc", "title": "通知", "body": ""}], "2026-11-06"))
+    examples = load_examples(spec)
+    check("离线回归样本 >= 5 条", len(examples) >= 5, str(len(examples)))
+
+    print("\n[12] AI 输出校验（模型提议、代码决定）")
+    for case in examples:
+        got = validate_response(
+            {"notices": [case["response"]]}, [case["input"]], "notices:v1"
+        )
+        row = got.get(case["input"]["uid"], {})
+        evs = row.get("events") or []
+        exp = case["expect"]
+        check(f"{case['name']}：事件数", len(evs) == exp["events"],
+              f"got {len(evs)} expect {exp['events']}")
+        if "date" in exp and evs:
+            check(f"{case['name']}：日期", evs[0]["date"] == exp["date"], evs[0]["date"])
+        if "urgency" in exp:
+            check(f"{case['name']}：紧急度", row.get("urgency") == exp["urgency"],
+                  str(row.get("urgency")))
+        if "category" in exp:
+            check(f"{case['name']}：分类", row.get("category") == exp["category"],
+                  str(row.get("category")))
+    check("全年份日期直接解析", parse_evidence_date("2026年11月25日", "2026-08-05") == "2026-11-25")
+    check("无年份以发布日期补年", parse_evidence_date("8 月 10 日", "2026-08-05") == "2026-08-10")
+    check("跨年公告进位到下一年", parse_evidence_date("1 月 10 日", "2026-12-20") == "2027-01-10")
+    check("无效短语返回空", parse_evidence_date("下周一", "2026-08-05") == "")
+
+    print("\n[13] AI 缓存与幂等")
+    with tempfile.TemporaryDirectory() as tmp:
+        cache = AiCache(str(Path(tmp) / "ai.json"))
+        h = input_hash({"uid": "u1", "title": "通知", "published": "2026-08-05",
+                        "url": "https://x/1", "body": "正文"}, "notices:v1")
+        check("input_hash 稳定", h == input_hash(
+            {"uid": "u1", "title": "通知", "published": "2026-08-05",
+             "url": "https://x/1", "body": "正文"}, "notices:v1"))
+        check("提示词升版改变 hash", h != input_hash(
+            {"uid": "u1", "title": "通知", "published": "2026-08-05",
+             "url": "https://x/1", "body": "正文"}, "notices:v2"))
+        cache.put("u1", h, {"uid": "u1", "category": "报名参赛", "version": "notices:v1"},
+                  "deepseek-flash", body="正文")
+        check("缓存命中", (cache.get("u1", h, "notices:v1") or {}).get("category") == "报名参赛")
+        check("缓存正文可读回", cache.body_of("u1") == "正文")
+        check("版本不匹配失效", cache.get("u1", h, "notices:v2") is None)
+        check("内容指纹不匹配失效", cache.get("u1", "other", "notices:v1") is None)
+        cache.save()
+        again = AiCache(str(Path(tmp) / "ai.json"))
+        check("落盘后可读回", (again.get("u1", h, "notices:v1") or {}).get("category") == "报名参赛")
+        off = AiConfig(enabled=False, api_key="", base_url="https://api.deepseek.com",
+                       model="deepseek-flash", thinking=False, temperature=0.1,
+                       max_tokens=4096, timeout=60, batch_size=8,
+                       max_body_chars=3000, prompt_version="")
+        item = {"uid": "u2", "title": "新通知", "published": "2026-11-06",
+                "url": "https://x/2", "body": ""}
+        res = analyze_notices([item], off, AiCache(str(Path(tmp) / "off.json")))
+        check("AI 关闭时零 API 调用", res.calls == 0 and res.analyzed == 0)
+        cache2 = AiCache(str(Path(tmp) / "body.json"))
+        cache2.put_body("u9", "正文")
+        cache2.save()
+        check("正文缓存不重复标脏", AiCache(str(Path(tmp) / "body.json")).changed is False)
+        check("正文缓存可读回", AiCache(str(Path(tmp) / "body.json")).body_of("u9") == "正文")
+
+    print("\n[13b] OpenAI 兼容客户端（离线 mock，验证 DeepSeek 特有参数）")
+    from unittest.mock import MagicMock
+
+    cfg = AiConfig(enabled=True, api_key="sk-test", base_url="https://api.deepseek.com",
+                   model="deepseek-flash", thinking=False, temperature=0.1,
+                   max_tokens=4096, timeout=60, batch_size=8,
+                   max_body_chars=3000, prompt_version="")
+    cli = AiClient(cfg)
+    fake = MagicMock()
+    ok_resp = MagicMock()
+    ok_resp.choices = [MagicMock(message=MagicMock(content='{"notices": []}'))]
+    ok_resp.usage = MagicMock(prompt_tokens=100, completion_tokens=20)
+    fake.chat.completions.create.return_value = ok_resp
+    cli._client = fake
+    check("客户端返回 JSON 文本", cli.complete("sys", "user") == '{"notices": []}')
+    kwargs = fake.chat.completions.create.call_args.kwargs
+    check("使用 response_format json_object",
+          kwargs.get("response_format") == {"type": "json_object"})
+    check("默认关闭 thinking",
+          (kwargs.get("extra_body") or {}).get("thinking") == {"type": "disabled"})
+    check("模型 = deepseek-flash", kwargs.get("model") == "deepseek-flash")
+    check("统计 token 用量", cli.prompt_tokens == 100 and cli.completion_tokens == 20)
+    blank = MagicMock()
+    blank.choices = [MagicMock(message=MagicMock(content="   "))]
+    blank.usage = None
+    blank_client = AiClient(cfg)
+    blank_client._client = MagicMock()
+    blank_client._client.chat.completions.create.return_value = blank
+    try:
+        blank_client.complete("sys", "user")
+        check("空白 content 判空并失败", False)
+    except AiClientError:
+        check("空白 content 判空并失败", True)
+    check("空白 content 触发重试", blank_client._client.chat.completions.create.call_count == 2)
+
+    print("\n[14] 规则日期抽取修复（AI 关闭时的兜底）")
+    n1 = _notice("关于全国总决赛日程安排的通知", uid="r1")
+    n1.published = date(2026, 8, 5)
+    n1.raw_body = "第二十一届研电赛全国总决赛决赛于 8 月 10 日在桐乡举行，请各参赛队提前到场。"
+    check("日期在关键词之后也能抽到", extract_deadline(n1) == "2026-08-10", extract_deadline(n1))
+    n2 = _notice("关于决赛延期的补充通知", uid="r2")
+    n2.published = date(2026, 12, 20)
+    n2.raw_body = "原定赛程调整，决赛改于 1 月 10 日举行，其余安排不变。"
+    check("跨年规则抽取补对年份", extract_deadline(n2) == "2027-01-10", extract_deadline(n2))
+    n3 = _notice("赛场花絮", uid="r3")
+    n3.published = date(2026, 8, 6)
+    n3.raw_body = "本通知发布于 2026-08-06，回顾精彩瞬间。"
+    check("不把发布日期当事件日", extract_deadline(n3) == "", extract_deadline(n3))
+    long_pad = "相关事项说明与联系方式如下，" * 6
+    n4 = _notice("报名通知", uid="r4")
+    n4.published = date(2026, 8, 1)
+    n4.raw_body = "报名截止" + long_pad + "2026年11月25日，逾期系统关闭。"
+    check("超过旧 42 字窗口仍能抽到", extract_deadline(n4) == "2026-11-25", extract_deadline(n4))
+
+    print("\n[15] AI 结果贯通载荷与邮件")
+    n5 = _notice("报名通知", uid="r5")
+    n5.published = date(2026, 11, 1)
+    before = n5.summary
+    apply_analysis(n5, {
+        "uid": "r5", "category": "报名参赛", "summary": "11 月 25 日报名截止",
+        "urgency": "critical", "reason": "临近截止", "version": "notices:v1",
+        "confidence": 0.95,
+        "events": [{"date": "2026-11-25", "evidence": "2026年11月25日",
+                    "label": "报名截止", "kind": "deadline", "location": "", "confidence": 0.9}],
+    })
+    check("AI 摘要不覆盖原 summary", n5.summary == before)
+    check("AI 分类生效", n5.category == "报名参赛")
+    check("critical 权重最高", n5.weight > 100)
+    check("critical 主题带标记", "【重要】" in build_subject([n5], "【研电赛】"))
+    check("纯文本含 AI 摘要", "11 月 25 日报名截止" in build_text([n5]))
+    check("纯文本含事件日", "报名截止：2026-11-25" in build_text([n5]))
+    check("HTML 含事件日", "2026-11-25" in build_html([n5]))
+    payload = build_payload([n5])
+    item5 = payload["notices"][0]
+    check("载荷含 aiEvents", item5["aiEvents"][0]["date"] == "2026-11-25")
+    check("载荷含 aiUrgency", item5["aiUrgency"] == "critical")
+    check("载荷不含正文", "rawBody" not in item5 and "body" not in item5)
+    fp1 = payload_fingerprint(payload)
+    item5["aiEvents"][0]["date"] = "2026-12-01"
+    check("AI 事件日变化触发重推", payload_fingerprint(payload) != fp1)
+    fallback = _notice("关于决赛的通知", uid="r6")
+    fallback.published = date(2026, 8, 5)
+    fallback.raw_body = "决赛于 8 月 10 日举行。"
+    fb_item = build_payload([fallback])["notices"][0]
+    check("AI 关闭时仍有等价事件", fb_item["aiEvents"][0]["date"] == "2026-08-10")
 
     print(f"\n结果：{PASS} 项通过，{FAIL} 项失败")
     return 1 if FAIL else 0

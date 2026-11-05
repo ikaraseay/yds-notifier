@@ -14,6 +14,10 @@ HIGH_PRIORITY = (
 )
 LOW_PRIORITY = ("倒计时", "回顾", "圆满", "闭幕", "开幕", "风采", "侧记", "花絮")
 
+# AI 紧急度参与排序：critical 置顶并触发「紧急快报」通道
+URGENCY_BONUS = {"critical": 100, "high": 20, "normal": 0, "low": -20}
+VALID_CATEGORIES = ("报名参赛", "评审与名单", "决赛与收官", "赛事动态", "其他通知")
+
 
 @dataclass
 class Attachment:
@@ -33,7 +37,17 @@ class Notice:
     uid: str = ""                  # 去重主键：源+id/url
     is_new: bool = False
     change_kind: str = "new"       # new | changed（官网修订同一篇文章时重推）
-    deadline: str = ""             # 从标题/摘要抽出的报名或赛程截止日（YYYY-MM-DD）
+    deadline: str = ""             # 规则兜底抽出的截止日（YYYY-MM-DD），AI 关闭时仍可用
+
+    # --- AI 分析结果（全部独立字段，绝不写回 summary，否则 detail_hash 会每天误报更新）---
+    raw_body: str = ""             # 详情页未截断正文，仅作 AI 输入；不进 payload / seen.json
+    ai_category: str = ""          # 限定在 VALID_CATEGORIES 内
+    ai_summary: str = ""           # 一句话摘要
+    ai_urgency: str = ""           # critical | high | normal | low
+    ai_reason: str = ""            # 判断依据（审计用）
+    ai_events: List[dict] = field(default_factory=list)  # 已归一化的真实事件日
+    ai_confidence: float = 0.0
+    ai_version: str = ""           # 提示词版本，升版触发缓存失效
 
     @property
     def date_text(self) -> str:
@@ -65,6 +79,14 @@ class Notice:
             "deadline": self.deadline,
             "attachments": [{"name": a.name, "url": a.url} for a in self.attachments],
             "changeKind": self.change_kind,
+            # AI 字段：Worker 侧 feed.ts 的 normalizeNotice 白名单必须同步
+            "aiCategory": self.ai_category,
+            "aiSummary": self.ai_summary,
+            "aiUrgency": self.ai_urgency,
+            "aiReason": self.ai_reason,
+            "aiEvents": self.ai_events[:4],
+            "aiConfidence": self.ai_confidence,
+            "aiVersion": self.ai_version,
         }
 
     @classmethod
@@ -83,15 +105,26 @@ class Notice:
             uid=str(raw.get("uid") or ""),
             change_kind=str(raw.get("changeKind") or "new"),
             deadline=str(raw.get("deadline") or ""),
+            ai_category=str(raw.get("aiCategory") or ""),
+            ai_summary=str(raw.get("aiSummary") or ""),
+            ai_urgency=str(raw.get("aiUrgency") or ""),
+            ai_reason=str(raw.get("aiReason") or ""),
+            ai_events=[e for e in (raw.get("aiEvents") or []) if isinstance(e, dict)][:4],
+            ai_confidence=(float(raw["aiConfidence"])
+                           if isinstance(raw.get("aiConfidence"), (int, float)) else 0.0),
+            ai_version=str(raw.get("aiVersion") or ""),
         )
 
     @property
     def category(self) -> str:
-        """按标题关键词粗分类，仅用于排序和邮件分组。
+        """AI 分类优先，否则按标题关键词粗分类。
 
+        限定在既有 5 类内，保证 recipients.wants() 的映射永远有效，不会漏发。
         注意判断顺序：先看「冲刺/回顾」类（倒计时、圆满落幕），
         它们虽然含「总决赛」字样但含金量低，不应混进决赛组。
         """
+        if self.ai_category in VALID_CATEGORIES:
+            return self.ai_category
         if any(k in self.title for k in LOW_PRIORITY):
             return "赛事动态"
         if any(k in self.title for k in ("报名", "开赛", "章程", "参赛说明", "赛题")):
@@ -104,8 +137,8 @@ class Notice:
 
     @property
     def weight(self) -> int:
-        """越大越重要。倒计时/回顾类降权，通知类升权。"""
-        score = 0
+        """越大越重要。AI 紧急度优先于关键词打分。"""
+        score = URGENCY_BONUS.get(self.ai_urgency, 0)
         for k in HIGH_PRIORITY:
             if k in self.title:
                 score += 2
@@ -139,8 +172,12 @@ def extract_ident(url: str, fallback: str) -> str:
     return fallback
 
 
-def parse_cn_date(text: str) -> Optional[date]:
-    """尽力从文本里解析日期，支持 2026-08-13 / 2026年8月13日 / 08-13 等。"""
+def parse_cn_date(text: str, base_year: int | None = None) -> Optional[date]:
+    """尽力从文本里解析日期，支持 2026-08-13 / 2026年8月13日 / 08-13 等。
+
+    `base_year` 用于无年份写法：传公告发布日期的年份，可避免跨年公告
+    （12 月发布、次年 1 月开赛）被补成当前年而算错。
+    """
     if not text:
         return None
     text = text.strip()
@@ -150,10 +187,10 @@ def parse_cn_date(text: str) -> Optional[date]:
             return date(int(m.group(1)), int(m.group(2)), int(m.group(3)))
         except ValueError:
             return None
-    m = re.search(r"(\d{1,2})\s*[-/月]\s*(\d{1,2})", text)
+    m = re.search(r"(\d{1,2})\s*[-/月.]\s*(\d{1,2})", text)
     if m:
         try:
-            return date(datetime.now().year, int(m.group(1)), int(m.group(2)))
+            return date(base_year or datetime.now().year, int(m.group(1)), int(m.group(2)))
         except ValueError:
             return None
     return None

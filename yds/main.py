@@ -19,11 +19,21 @@ from typing import Dict, List
 import yaml
 
 from . import fetch  # noqa: F401  (提前初始化 session)
+from .ai.analyzer import analyze_notices
+from .ai.body import backfill_bodies
+from .ai.cache import AiCache
+from .ai.client import AiConfig
 from .config import settings
 from .dispatch import dispatch
 from .mailer import build_html, build_text, sort_notices
 from .models import Notice
-from .publish import build_payload, notices_from_state, payload_fingerprint, publish_notices
+from .publish import (
+    apply_analysis,
+    build_payload,
+    notices_from_state,
+    payload_fingerprint,
+    publish_notices,
+)
 from .recipients import resolve_recipients, split_recipients
 from .senders import build_client
 from .sources import BaseSource, build_sources
@@ -202,14 +212,81 @@ def main(argv: List[str] | None = None) -> int:
             log.info("%s | %-8s | %-14s | %s%s", n.date_text, n.category, n.source, flag, n.title)
         return 0
 
+    # --- 归档全集：列表页 + 本轮详情 + 历史重建 -------------------------------
+    # detailed 带未截断正文，是 AI 判断真实事件日期的关键输入；历史条目则从
+    # seen.json 重建，并靠 ai.json 缓存补回分析结果与正文。
+    ai_cache = AiCache(os.path.join(ROOT, "data/ai.json"), keep=int(cfg.get("state_keep", 800)))
+    all_items = {n.uid: n for n in meta}
+    for n in detailed:
+        all_items[n.uid] = n
+    for n in notices_from_state(state, ai_cache):
+        all_items.setdefault(n.uid, n)
+
+    # --- AI 分析：批量 + 指纹缓存 + 渐进式历史回填 ----------------------------
+    # 收敛后（所有 uid 都有缓存）无新公告时零 API 调用；提示词升版全量重算。
+    if not args.dry_run and not args.preview:
+        ai_cfg = AiConfig(
+            enabled=settings.ai_enabled,
+            api_key=settings.ai_api_key,
+            base_url=settings.ai_base_url,
+            model=settings.ai_model,
+            thinking=settings.ai_thinking,
+            temperature=settings.ai_temperature,
+            max_tokens=settings.ai_max_tokens,
+            timeout=settings.ai_timeout,
+            batch_size=settings.ai_batch_size,
+            max_body_chars=settings.ai_max_body_chars,
+            prompt_version="",  # 实际版本由 prompts/manifest.yaml 的 active 决定
+        )
+        ai_inputs = [
+            {
+                "uid": n.uid,
+                "title": n.title,
+                "published": n.date_text if n.published else "",
+                "url": n.url,
+                "source": n.source,
+                "category": n.category,
+                "summary": n.summary,
+                "body": n.raw_body or ai_cache.body_of(n.uid),
+                "list_hash": n.list_hash,
+                "detail_hash": n.detail_hash,
+            }
+            for n in all_items.values()
+        ]
+        # 只为「缓存也没有结果」的历史条目抓正文，每轮限量，收敛后不再请求官网
+        hosts = sorted({
+            h for s in (cfg.get("sources") or [])
+            for h in (s.get("allowed_hosts") or [])
+        })
+        # body 构建时已尝试从缓存读回；仍为空才需要抓详情页。
+        # 抓到的正文立刻入缓存，因此 AI 关闭 / 调用失败时也不会每 10 分钟重复抓官网。
+        need = [i for i in ai_inputs if not i["body"]]
+        got = backfill_bodies(
+            need, hosts,
+            max(0, int(cfg.get("ai_backfill_limit", 12))),
+            settings.ai_max_body_chars,
+        )
+        if got:
+            log.info("历史正文回填 %s 条", got)
+        for i in ai_inputs:
+            if i["body"]:
+                ai_cache.put_body(i["uid"], i["body"])
+        ai_result = analyze_notices(ai_inputs, ai_cfg, ai_cache)
+        by_uid = {i["uid"]: i for i in ai_inputs}
+        for n in all_items.values():
+            # 本轮抓过详情的对象也要带上刚回填的正文，供规则降级抽日期
+            match = by_uid.get(n.uid)
+            if match and match["body"] and not n.raw_body:
+                n.raw_body = match["body"]
+            apply_analysis(n, ai_result.analyses.get(n.uid))
+        ai_cache.prune()
+        ai_cache.save()
+
     # --- 归档 / RSS / 日历的数据同步 -----------------------------------------
     # 与「本轮有没有新公告」无关：首次升级要回填历史，官网补充 / 延期也要更新归档。
     # 用内容指纹限流，只有真的变了才写 Worker KV；失败只告警，绝不阻断邮件主流程。
     archive_changed = False
     if not args.dry_run and not args.preview:
-        all_items = {n.uid: n for n in meta}
-        for n in notices_from_state(state):
-            all_items.setdefault(n.uid, n)
         payload = build_payload(list(all_items.values()), int(cfg.get("notices_limit", 200)))
         fp = payload_fingerprint(payload)
         if fp != state.published_hash and publish_notices(payload):

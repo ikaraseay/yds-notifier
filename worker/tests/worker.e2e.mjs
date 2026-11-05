@@ -690,5 +690,86 @@ const check = (name, cond, extra = "") => {
   r = await call(confirmPathOf(email));
   check("重复确认返回 400", r.status === 400, r.status);
 
+
+  console.log("\n[31] AI 字段透传与日历真实事件日");
+  const aiPayload = {
+    site: "研电赛通知订阅", baseUrl: "https://yds.workers.dev",
+    notices: [
+      {
+        uid: "ai1", title: "关于全国总决赛日程安排的通知",
+        url: "https://cpipc.acge.org.cn/x/1", date: "2026-08-05",
+        category: "决赛与收官", source: "研创网", summary: "", deadline: "",
+        changeKind: "new", aiCategory: "决赛与收官",
+        aiSummary: "决赛 8 月 10 日在桐乡举行，<script>alert(1)</script>请勿错过。",
+        aiUrgency: "critical", aiReason: "含明确决赛日期", aiVersion: "notices:v1",
+        aiConfidence: 0.93,
+        aiEvents: [
+          { date: "2026-08-10", evidence: "8 月 10 日", label: "决赛举行",
+            kind: "event", location: "桐乡", confidence: 0.9 },
+          { date: "2026-08-20", evidence: "8 月 20 日", label: "公示截止",
+            kind: "deadline", location: "", confidence: 0.8 },
+        ],
+      },
+      {
+        uid: "ai2", title: "常规说明", url: "https://cpipc.acge.org.cn/x/2",
+        date: "2026-09-01", category: "其他通知", deadline: "",
+        aiUrgency: "bogus", aiCategory: "非法分类",
+        aiEvents: [{ date: "not-a-date", label: "坏日期", kind: "event" }],
+      },
+      {
+        uid: "ai3", title: "无 AI 结果的历史通知",
+        url: "https://cpipc.acge.org.cn/x/3", date: "2026-07-01",
+        deadline: "2026-07-20",
+      },
+    ],
+  };
+  r = await call("/api/notices", {
+    method: "POST", body: JSON.stringify(aiPayload),
+    headers: { Authorization: "Bearer admin-secret" },
+  });
+  check("含 AI 字段的同步 200", r.status === 200, r.text.slice(0, 120));
+
+  r = await call("/archive");
+  check("归档页含 AI 摘要", r.text.includes("决赛 8 月 10 日在桐乡举行"));
+  check("归档页转义脚本", !r.text.includes("<script>alert(1)</script>")
+    && r.text.includes("&lt;script&gt;"));
+  check("归档页含真实事件日", r.text.includes("决赛举行：2026-08-10"));
+  check("归档页标出重要", r.text.includes("重要"));
+
+  r = await call("/feed.xml");
+  check("RSS 含 AI 摘要", r.text.includes("决赛 8 月 10 日在桐乡举行"));
+  check("RSS 含事件日", r.text.includes("决赛举行：2026-08-10"));
+  check("RSS 标出重要", r.text.includes("【重要】"));
+
+  r = await call("/calendar.ics");
+  const ics = r.text;
+  check("日历 200", r.status === 200, r.status);
+  check("DTSTART 用真实事件日", ics.includes("DTSTART;VALUE=DATE:20260810"));
+  check("第二个事件也生成", ics.includes("DTSTART;VALUE=DATE:20260820"));
+  check("不再把发布日期当事件日", !ics.includes("DTSTART;VALUE=DATE:20260805"));
+  check("非法日期被丢弃并回退发布日期", ics.includes("DTSTART;VALUE=DATE:20260901"));
+  check("无 AI 事件时用 deadline", ics.includes("DTSTART;VALUE=DATE:20260720"));
+  check("全天事件带 DTEND", ics.includes("DTEND;VALUE=DATE:20260811"));
+  check("多事件 UID 带序号", ics.includes("UID:ai1:0@") && ics.includes("UID:ai1:1@"));
+  check("单事件 UID 保持不变", ics.includes("UID:ai3@") && !ics.includes("UID:ai3:0@"));
+  check("地点写入 LOCATION", ics.includes("LOCATION:桐乡"));
+  check("critical 写进 SUMMARY", ics.includes("【重要】"));
+  check("原文日期写入 DESCRIPTION", ics.includes("原文日期：8 月 10 日"));
+  check("SEQUENCE 非零", /SEQUENCE:[1-9]/.test(ics));
+  check("VEVENT 共 4 个", (ics.match(/BEGIN:VEVENT/g) || []).length === 4,
+    String((ics.match(/BEGIN:VEVENT/g) || []).length));
+  check("ICS 全 CRLF", !/(^|[^\r])\n/.test(ics));
+
+  // 同一份数据重复同步，UID 与 SEQUENCE 必须稳定（延期时原地更新、不留重复）
+  await call("/api/notices", {
+    method: "POST", body: JSON.stringify(aiPayload),
+    headers: { Authorization: "Bearer admin-secret" },
+  });
+  const ics2 = (await call("/calendar.ics")).text;
+  const seqs = (s) => (s.match(/SEQUENCE:\d+/g) || []).join("|");
+  check("重复同步 SEQUENCE 稳定", seqs(ics) === seqs(ics2));
+  check("重复同步不产生重复事件",
+    (ics2.match(/BEGIN:VEVENT/g) || []).length === 4);
+
   console.log(`\n结果：${pass} 项通过${process.exitCode ? "，存在失败" : "，全部通过"}`);
 })();

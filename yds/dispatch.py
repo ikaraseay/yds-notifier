@@ -50,6 +50,7 @@ def _send_one(
     batch: Sequence[Notice],
     subject: str,
     repo_url: str,
+    compact_low: bool = False,
 ) -> None:
     mine = [n for n in batch if rcpt.wants(n.category)]
     if not mine:
@@ -65,6 +66,7 @@ def _send_one(
         repo_url=repo_url,
         unsubscribe_url=unsub_for,
         issue_url=f"{repo_url}/issues" if repo_url else "",
+        compact_low=compact_low,
     )
     text_body = build_text(mine, site=settings.site_name, unsubscribe_url=unsub_for)
     sender.send(
@@ -104,6 +106,10 @@ def dispatch(
         if key:
             digest_users[key].append(r)
 
+    # AI 判为 critical 的通知走「紧急快报」：无视日报/周报设置立即送达，
+    # 也不进摘要池，避免同一条被发两次。暂停中的用户仍然不打扰。
+    urgent = [n for n in fresh if n.ai_urgency == "critical"]
+
     pending = load_pending(pending_path)
     # 2) 有摘要用户时把本轮条目入池（两边都放，各自独立消费）
     if digest_users["daily"] or digest_users["weekly"]:
@@ -111,6 +117,8 @@ def dispatch(
             if not digest_users[key]:
                 continue
             for n in fresh:
+                if n.ai_urgency == "critical":
+                    continue
                 if n.uid not in pending[key]:
                     pending[key][n.uid] = n.to_feed_item()
                     result.pool_changed = True
@@ -133,6 +141,25 @@ def dispatch(
                 log.error("发送给 %s 失败：%s", rcpt.email, exc)
                 result.failed.append(rcpt.email)
 
+    # 3b) 紧急快报：给原本要等摘要的用户也立刻送一份（不绕过暂停）
+    if urgent:
+        subject = _subject(urgent, "紧急快报", prefix)
+        for rcpt in recipients:
+            if not rcpt.digest_key or rcpt.is_paused():
+                continue
+            if not any(rcpt.wants(n.category) for n in urgent):
+                continue
+            if dry_run:
+                log.info("[dry-run] 紧急快报：%s -> %s", subject, rcpt.email)
+                continue
+            try:
+                _send_one(sender, rcpt, urgent, subject, repo_url)
+                result.sent += 1
+            except Exception as exc:  # noqa: BLE001
+                log.error("紧急快报发送给 %s 失败：%s", rcpt.email, exc)
+                if rcpt.email not in result.failed:
+                    result.failed.append(rcpt.email)
+
     # 4) 摘要窗口：每天 digest_hour 的第一个 10 分钟；周报只在周一
     now = datetime.now()
     in_window = now.hour == digest_hour and now.minute < 10
@@ -153,7 +180,7 @@ def dispatch(
                 if not any(rcpt.wants(n.category) for n in batch):
                     continue
                 try:
-                    _send_one(sender, rcpt, batch, subject, repo_url)
+                    _send_one(sender, rcpt, batch, subject, repo_url, compact_low=True)
                     result.sent += 1
                 except Exception as exc:  # noqa: BLE001
                     # 摘要失败不阻断主流程状态写入：条目仍在池里，下个窗口会重试，

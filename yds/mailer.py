@@ -52,6 +52,8 @@ def build_subject(notices: Sequence[Notice], prefix: str) -> str:
     """主题行纯文字，靠前缀与条数区分，避免 emoji 在部分客户端显示成方框。"""
     if not notices:
         return prefix
+    if any(n.ai_urgency == "critical" for n in notices):
+        prefix = "【重要】" + prefix
     first = notices[0]
     if len(notices) == 1:
         return f"{prefix} {first.title}"[:120]
@@ -62,10 +64,15 @@ def build_text(notices: Sequence[Notice], site: str = "", unsubscribe_url: str =
     lines = [f"研电赛通知 · 共 {len(notices)} 条\n"]
     for i, n in enumerate(notices, 1):
         flag = "【更新】" if n.change_kind == "changed" else ""
-        lines.append(f"[{i}] {flag}{n.title}")
+        urgent = "【重要】" if n.ai_urgency == "critical" else ""
+        lines.append(f"[{i}] {urgent}{flag}{n.title}")
         lines.append(f"    {n.date_text}｜{n.category}｜{n.source}")
-        if n.summary:
-            lines.append(f"    {n.summary}")
+        if n.ai_summary or n.summary:
+            lines.append(f"    {n.ai_summary or n.summary}")
+        for e in n.ai_events[:4]:
+            label = e.get("label") or "日程"
+            where = f"（{e['location']}）" if e.get("location") else ""
+            lines.append(f"    {label}：{e.get('date', '')}{where}")
         lines.append(f"    原文：{n.url}")
         if n.attachments:
             lines.append("    附件：")
@@ -99,7 +106,7 @@ def _safe_url(v: str) -> str:
     return v
 
 
-def _notice_card(n: Notice) -> str:
+def _notice_card(n: Notice, compact: bool = False) -> str:
     color, soft = CATEGORY_STYLE.get(n.category, ("#7B9EF8", "#EEF3FF"))
     is_soft = any(k in n.title for k in SOFT_BADGE)
 
@@ -118,6 +125,28 @@ def _notice_card(n: Notice) -> str:
     else:
         badge = ""
 
+    if n.ai_urgency == "critical":
+        badge = (
+            f'<span style="display:inline-block;padding:2px 9px;background:#FF6B6B;color:#ffffff;'
+            f'font-size:11px;border-radius:4px;margin-left:6px;vertical-align:middle;'
+            f'border:1px solid #2E2A33;font-weight:700;">重要</span>' + badge
+        )
+
+    # 「低价值动态」在摘要邮件里折叠成一行，不占整张卡片
+    if compact:
+        return f"""
+    <tr><td style="padding:0 0 8px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+             style="background:#ffffff;border:2px solid #2E2A33;border-radius:6px;">
+        <tr><td style="padding:9px 14px;font-size:12px;color:#5a6072;line-height:19px;">
+          <span style="display:inline-block;width:6px;height:6px;border-radius:2px;
+                 background:{color};margin-right:7px;vertical-align:middle;"></span>
+          <a href="{_esc(_safe_url(n.url))}" style="color:#2b2f3d;text-decoration:none;">{_esc(n.title)}</a>
+          <span style="color:#b8bccb;">&nbsp;{_esc(n.date_text)}</span>
+        </td></tr>
+      </table>
+    </td></tr>"""
+
     attach_block = ""
     if n.attachments:
         rows = "".join(
@@ -134,12 +163,26 @@ def _notice_card(n: Notice) -> str:
             f"</td></tr>"
         )
 
+    shown_summary = n.ai_summary or n.summary
     summary_block = (
         f'<tr><td style="padding:10px 18px 0;font-size:13px;color:#5a6072;line-height:21px;">'
-        f"{_esc(n.summary)}</td></tr>"
-        if n.summary
+        f"{_esc(shown_summary)}</td></tr>"
+        if shown_summary
         else ""
     )
+
+    event_block = ""
+    if n.ai_events:
+        rows = "".join(
+            f'<div style="margin:3px 0;">'
+            f'<span style="display:inline-block;padding:1px 7px;background:#FFD93D;'
+            f'border:1px solid #2E2A33;border-radius:4px;font-size:11px;font-weight:700;">'
+            f'{_esc(str(e.get("label") or "日程"))}</span>&nbsp;'
+            f'<span style="font-size:12px;color:#2E2A33;">{_esc(str(e.get("date") or ""))}'
+            f'{" · " + _esc(str(e["location"])) if e.get("location") else ""}</span></div>'
+            for e in n.ai_events[:4]
+        )
+        event_block = f'<tr><td style="padding:10px 18px 0;">{rows}</td></tr>'
 
     return f"""
     <tr><td style="padding:0 0 14px;">
@@ -160,6 +203,7 @@ def _notice_card(n: Notice) -> str:
              font-weight:600;text-decoration:none;">{_esc(n.title)}</a>{badge}
         </td></tr>
         {summary_block}
+        {event_block}
         {attach_block}
         <tr><td style="padding:14px 18px 18px;">
           <a href="{_esc(_safe_url(n.url))}" style="display:inline-block;padding:9px 22px;
@@ -177,6 +221,7 @@ def build_html(
     repo_url: str = "",
     unsubscribe_url: str = "",
     issue_url: str = "",
+    compact_low: bool = False,
 ) -> str:
     groups = {c: [] for c in CATEGORY_ORDER}
     for n in notices:
@@ -188,7 +233,9 @@ def build_html(
         if not items:
             continue
         color, _ = CATEGORY_STYLE[cat]
-        cards = "".join(_notice_card(n) for n in items)
+        cards = "".join(
+            _notice_card(n, compact=compact_low and n.ai_urgency == "low") for n in items
+        )
         blocks.append(
             f"""
     <tr><td style="padding:22px 0 12px;">
