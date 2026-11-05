@@ -79,6 +79,7 @@ export async function handleDeleteAccount(req: Request, env: Env): Promise<Respo
         "打开订阅页",
         cfg.baseUrl,
         "所有 user:/sub:/session: 记录均已清除，无需额外操作。",
+        cfg.siteName,
       ),
       `注销：${email}`,
     ).catch((e) => console.error("站长通知发送失败", e));

@@ -77,6 +77,7 @@ export async function handleLogin(req: Request, env: Env): Promise<Response> {
       "进入控制台",
       loginUrl,
       "链接 15 分钟内有效、只能用一次。如果不是你本人操作，忽略本邮件即可，不会有任何变化。",
+      cfg.siteName,
     ),
     `进入「${cfg.siteName}」：\n${loginUrl}\n\n链接 15 分钟内有效、只能用一次。如非本人操作请忽略。`,
   );
@@ -151,6 +152,7 @@ export async function handleMagicVerify(url: URL, env: Env): Promise<Response> {
           "打开订阅页",
           base,
           "如需移除，可在 Cloudflare KV 删除 sub:邮箱 与 user:邮箱。",
+          cfg.siteName,
         ),
         `新订阅者：${email}`,
       ).catch((e) => console.error("站长通知发送失败", e));
