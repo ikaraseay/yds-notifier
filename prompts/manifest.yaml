@@ -6,12 +6,18 @@ version: 1
 
 prompts:
   notices:
-    active: v1
-    system: notices/v1.system.md
-    user: notices/v1.user.md
-    schema: schemas/analysis.schema.json
-    examples: schemas/examples.json
+    active: v2
+    system: notices/v2.system.md
+    user: notices/v2.user.md
+    schema: schemas/analysis.v2.schema.json
+    examples: schemas/examples.v2.json
     changelog:
+      - version: v2
+        date: 2026-11-06
+        note: >-
+          增加赛事名、阶段、人群与行动建议四类字段，供邮件分区 / 日历标签 /
+          归档筛选使用。枚举值由 yds/personas.py 统一收敛，模型给非法值时丢弃
+          并回退规则推断。升版会让 data/ai.json 全量失效（这是预期行为）。
       - version: v1
         date: 2026-11-06
         note: >-

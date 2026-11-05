@@ -121,8 +121,11 @@ jobs:
         run: |
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # 本轮无变化时 state 不会写文件，此时不应让 workflow 失败
-          git add -- data/seen.json data/pending.json data/ai.json 2>/dev/null || true
+          # 本轮无变化时 state 不会写文件，此时不应让 workflow 失败；
+          # 逐个判断存在性，避免某个可选文件缺失导致整条 git add 失败
+          for f in data/seen.json data/pending.json data/ai.json data/schedule.json data/reminders.json; do
+            [ -f "$f" ] && git add -- "$f"
+          done
           if git diff --cached --quiet; then
             echo "状态无变化，跳过提交"
             exit 0

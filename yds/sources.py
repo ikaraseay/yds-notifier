@@ -116,15 +116,29 @@ class BaseSource(ABC):
 # 研创网（中国研究生创新实践系列大赛）研电赛栏目
 # --------------------------------------------------------------------------
 class CpipcSource(BaseSource):
-    """https://cpipc.acge.org.cn/cw/contestNews/list/6/N"""
+    """研电赛（电子设计竞赛）专区通知。
+
+    地址形如 /cw/contestNews/list/6/1 —— 6 是「电子设计竞赛」的赛事 id，
+    其他主题赛事把 contest 改成 1/3/4/10… 即可复用。
+    """
 
     key = "cpipc"
     name = "研创网·研电赛"
     base = "https://cpipc.acge.org.cn/"
-    LIST_TPL = "https://cpipc.acge.org.cn/cw/contestNews/list/6/{page}"
+    LIST_TPL = "https://cpipc.acge.org.cn/cw/contestNews/list/{contest}/{page}"
+
+    def __init__(
+        self,
+        max_pages: int = 1,
+        keywords: Optional[List[str]] = None,
+        allowed_hosts: Optional[List[str]] = None,
+        contest: int = 6,
+    ):
+        super().__init__(max_pages=max_pages, keywords=keywords, allowed_hosts=allowed_hosts)
+        self.contest = int(contest)
 
     def list_page(self, page: int) -> str:
-        return self.LIST_TPL.format(page=page)
+        return self.LIST_TPL.format(contest=self.contest, page=page)
 
     def parse_list(self, html: str) -> List[Notice]:
         soup = BeautifulSoup(html, "html.parser")
@@ -189,6 +203,98 @@ class CpipcSource(BaseSource):
 
 
 # --------------------------------------------------------------------------
+# 研创网「大赛资讯」栏目：大赛通知 / 大赛新闻 / 大赛文件
+# --------------------------------------------------------------------------
+class CpipcPwSource(BaseSource):
+    """研创网全站级栏目，覆盖 20 项主题赛事的公共通知。
+
+    这些页面与赛区专区的结构一致（`ul#news_list li.li`），
+    区别只在详情页正文容器同样是 `.articleContent`，因此共用一个解析器。
+    """
+
+    key = "cpipc_pw"
+    base = "https://cpipc.acge.org.cn/"
+    LIST_TPL = "https://cpipc.acge.org.cn/pw/{channel}/list/{page}"
+    NAMES = {
+        "notice": "研创网·大赛通知",
+        "news": "研创网·大赛新闻",
+        "document": "研创网·大赛文件",
+    }
+
+    def __init__(
+        self,
+        max_pages: int = 1,
+        keywords: Optional[List[str]] = None,
+        allowed_hosts: Optional[List[str]] = None,
+        channel: str = "notice",
+    ):
+        self.channel = channel if channel in self.NAMES else "notice"
+        self.name = self.NAMES[self.channel]
+        super().__init__(max_pages=max_pages, keywords=keywords, allowed_hosts=allowed_hosts)
+
+    def list_page(self, page: int) -> str:
+        return self.LIST_TPL.format(channel=self.channel, page=page)
+
+    def parse_list(self, html: str) -> List[Notice]:
+        soup = BeautifulSoup(html, "html.parser")
+        container = soup.find(id="news_list") or soup
+        out: List[Notice] = []
+        for li in container.find_all("li", class_="li"):
+            a = li.find("a", href=True)
+            if not a:
+                continue
+            href = _strip_page_param(urljoin(self.base, a["href"]))
+            title = (a.get("title") or a.get_text(" ", strip=True)).strip()
+            day = li.select_one(".day")
+            month = li.select_one(".date")
+            published = None
+            if month:
+                raw = month.get_text(strip=True)
+                if day:
+                    raw = f"{raw}-{day.get_text(strip=True)}"
+                published = parse_cn_date(raw)
+            summary = clean_text(li.select_one(".t2").get_text(" ", strip=True)) if li.select_one(".t2") else ""
+            out.append(
+                Notice(
+                    source=self.name,
+                    source_key=f"{self.key}_{self.channel}",
+                    title=title,
+                    url=href,
+                    published=published,
+                    summary=summary,
+                    uid=make_uid(f"{self.key}_{self.channel}", extract_ident(href, title)),
+                )
+            )
+        return out
+
+    def enrich(self, notice: Notice) -> Notice:
+        soup = self._detail_soup(notice)
+        if soup is None:
+            return notice
+
+        head = soup.select_one(".top .h")
+        if head and head.get_text(strip=True):
+            notice.title = head.get_text(" ", strip=True)
+
+        meta = soup.select_one(".top .p")
+        if meta:
+            d = parse_cn_date(meta.get_text(" ", strip=True))
+            if d:
+                notice.published = d
+
+        body = soup.select_one(".articleContent")
+        if body:
+            full = clean_text(body.get_text(" ", strip=True), 6000)
+            notice.raw_body = full
+            notice.summary = notice.summary or clean_text(body.get_text(" ", strip=True), 300)
+            for a in body.find_all("a", href=True):
+                text = a.get_text(" ", strip=True)
+                if "附件" in text or re.search(r"\.(pdf|docx?|xlsx?|zip|rar)$", text, re.I):
+                    notice.attachments.append(Attachment(text or "附件", urljoin(self.base, a["href"])))
+        return notice
+
+
+# --------------------------------------------------------------------------
 # 中国电子学会 通知公告
 # --------------------------------------------------------------------------
 class CieSource(BaseSource):
@@ -200,7 +306,7 @@ class CieSource(BaseSource):
     key = "cie"
     name = "中国电子学会·通知公告"
     base = "https://www.cie.org.cn/"
-    DEFAULT_KEYWORDS = ("电子设计竞赛", "研电赛", "研究生电子设计")
+    DEFAULT_KEYWORDS = ("电子设计竞赛", "研电赛", "研究生电子设计", "创新实践系列大赛", "研究生创新实践")
 
     def __init__(
         self,
@@ -259,6 +365,7 @@ class CieSource(BaseSource):
 
 REGISTRY = {
     CpipcSource.key: CpipcSource,
+    CpipcPwSource.key: CpipcPwSource,
     CieSource.key: CieSource,
 }
 
@@ -273,11 +380,15 @@ def build_sources(config: dict) -> List[BaseSource]:
         if cls is None:
             log.warning("未知数据源 %s，已跳过", item.get("key"))
             continue
-        sources.append(
-            cls(
-                max_pages=int(item.get("max_pages", 1)),
-                keywords=item.get("keywords"),
-                allowed_hosts=item.get("allowed_hosts"),
-            )
+        kwargs = dict(
+            max_pages=int(item.get("max_pages", 1)),
+            keywords=item.get("keywords"),
+            allowed_hosts=item.get("allowed_hosts"),
         )
+        # 只有对应数据源认识的参数才传，避免基类构造函数报错
+        if cls is CpipcSource:
+            kwargs["contest"] = int(item.get("contest", 6))
+        if cls is CpipcPwSource:
+            kwargs["channel"] = str(item.get("channel", "notice"))
+        sources.append(cls(**kwargs))
     return sources

@@ -18,6 +18,7 @@ from typing import Dict, List, Sequence
 from .config import settings
 from .mailer import build_html, build_subject, build_text, sort_notices
 from .models import Notice
+from .personas import DEADLINE_STAGES
 from .recipients import Recipient
 from .senders import BaseSender
 from .state import load_pending, pending_notices, save_pending
@@ -52,7 +53,7 @@ def _send_one(
     repo_url: str,
     compact_low: bool = False,
 ) -> None:
-    mine = [n for n in batch if rcpt.wants(n.category)]
+    mine = [n for n in batch if rcpt.wants_notice(n)]
     if not mine:
         return
     unsub_ready = bool(settings.unsub_url and settings.unsub_secret)
@@ -60,6 +61,7 @@ def _send_one(
         build_unsubscribe_url(settings.unsub_url, settings.unsub_secret, rcpt.email)
         if unsub_ready else ""
     )
+    persona = next(iter(rcpt.audiences), "") if rcpt.audiences else ""
     html_body = build_html(
         mine,
         site=settings.site_name,
@@ -67,6 +69,7 @@ def _send_one(
         unsubscribe_url=unsub_for,
         issue_url=f"{repo_url}/issues" if repo_url else "",
         compact_low=compact_low,
+        persona=persona,
     )
     text_body = build_text(mine, site=settings.site_name, unsubscribe_url=unsub_for)
     sender.send(
@@ -79,6 +82,16 @@ def _label_for(batch: Sequence[Notice]) -> str:
     return "通知更新" if any(n.change_kind == "changed" for n in batch) else "新通知"
 
 
+def _is_urgent(n: Notice) -> bool:
+    """紧急判定：AI 判 critical，或规则识别出 7 天内截止（无 AI 时仍生效）。"""
+    if n.ai_urgency == "critical":
+        return True
+    if n.is_low_value or n.stage not in DEADLINE_STAGES:
+        return False
+    days = n.days_to_deadline
+    return days is not None and days <= 7
+
+
 def dispatch(
     *,
     sender: BaseSender,
@@ -87,9 +100,12 @@ def dispatch(
     cfg: dict,
     pending_path: str,
     dry_run: bool = False,
+    reminders: Sequence[Notice] = (),
 ) -> DispatchResult:
     result = DispatchResult()
-    if not notices or not recipients:
+    if not notices and not reminders:
+        return result
+    if not recipients:
         return result
 
     prefix = cfg.get("subject_prefix", "【研电赛】")
@@ -106,9 +122,10 @@ def dispatch(
         if key:
             digest_users[key].append(r)
 
-    # AI 判为 critical 的通知走「紧急快报」：无视日报/周报设置立即送达，
-    # 也不进摘要池，避免同一条被发两次。暂停中的用户仍然不打扰。
-    urgent = [n for n in fresh if n.ai_urgency == "critical"]
+    # AI 判为 critical，或规则识别出 7 天内截止的通知走「紧急快报」：
+    # 无视日报/周报设置立即送达，也不进摘要池，避免同一条被发两次。
+    # 暂停中的用户仍然不打扰。
+    urgent = [n for n in fresh if _is_urgent(n)]
 
     pending = load_pending(pending_path)
     # 2) 有摘要用户时把本轮条目入池（两边都放，各自独立消费）
@@ -117,7 +134,7 @@ def dispatch(
             if not digest_users[key]:
                 continue
             for n in fresh:
-                if n.ai_urgency == "critical":
+                if _is_urgent(n):
                     continue
                 if n.uid not in pending[key]:
                     pending[key][n.uid] = n.to_feed_item()
@@ -127,9 +144,9 @@ def dispatch(
     for batch in _chunks(fresh, max_notify):
         subject = _subject(batch, _label_for(batch), prefix)
         for rcpt in instant:
-            mine = [n for n in batch if rcpt.wants(n.category)]
+            mine = [n for n in batch if rcpt.wants_notice(n)]
             if not mine:
-                log.info("%s 本轮通知不符合其栏目偏好，跳过", rcpt.email)
+                log.info("%s 本轮通知不符合其栏目 / 视角偏好，跳过", rcpt.email)
                 continue
             if dry_run:
                 log.info("[dry-run] 将发送：%s -> %s（%s 条）", subject, rcpt.email, len(mine))
@@ -147,7 +164,7 @@ def dispatch(
         for rcpt in recipients:
             if not rcpt.digest_key or rcpt.is_paused():
                 continue
-            if not any(rcpt.wants(n.category) for n in urgent):
+            if not any(rcpt.wants_notice(n) for n in urgent):
                 continue
             if dry_run:
                 log.info("[dry-run] 紧急快报：%s -> %s", subject, rcpt.email)
@@ -159,6 +176,27 @@ def dispatch(
                 log.error("紧急快报发送给 %s 失败：%s", rcpt.email, exc)
                 if rcpt.email not in result.failed:
                     result.failed.append(rcpt.email)
+
+    # 3c) 官方赛程提醒：T-30 / T-7 / T-3 / T-1 独立成一封，
+    #     不写入 seen.json 与摘要池（提醒是时点性的，过期即失效）。
+    if reminders:
+        for batch in _chunks(list(reminders), max_notify):
+            subject = _subject(batch, "日程提醒", prefix)
+            for rcpt in recipients:
+                if rcpt.is_paused():
+                    continue
+                if not any(rcpt.wants_notice(n) for n in batch):
+                    continue
+                if dry_run:
+                    log.info("[dry-run] 日程提醒：%s -> %s（%s 条）", subject, rcpt.email, len(batch))
+                    continue
+                try:
+                    _send_one(sender, rcpt, batch, subject, repo_url)
+                    result.sent += 1
+                except Exception as exc:  # noqa: BLE001
+                    log.error("日程提醒发送给 %s 失败：%s", rcpt.email, exc)
+                    if rcpt.email not in result.failed:
+                        result.failed.append(rcpt.email)
 
     # 4) 摘要窗口：每天 digest_hour 的第一个 10 分钟；周报只在周一
     now = datetime.now()
@@ -177,7 +215,7 @@ def dispatch(
         for batch in _chunks(pool, max_notify):
             subject = _subject(batch, label, prefix)
             for rcpt in users:
-                if not any(rcpt.wants(n.category) for n in batch):
+                if not any(rcpt.wants_notice(n) for n in batch):
                     continue
                 try:
                     _send_one(sender, rcpt, batch, subject, repo_url, compact_low=True)

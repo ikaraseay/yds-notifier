@@ -34,6 +34,10 @@ full_check_limit: 30
 # 同步到 Worker 的公开通知条数上限（归档页 / RSS / 日历共用）
 notices_limit: 200
 
+# 超过多少天的「新条目」只归档、不推送。
+# 扩充数据源后，2024/2025 的历史文件会被首次识别成新条目，靠这个参数挡住。
+max_age_days: 540
+
 # AI 分析：每轮最多为多少条「缓存中无结果」的历史通知补抓详情页正文。
 # 首次接入 AI 时历史条目没有正文，靠这个参数渐进回填，收敛后不再请求官网。
 # 0 表示只分析本轮抓过详情的通知（历史日历事件日不会补全）。
@@ -48,9 +52,35 @@ ai_backfill_limit: 12
 # ---------------------------------------------------------------------------
 sources:
   # 研创网（中国研究生创新实践系列大赛平台）—— 研电赛官方「大赛通知」栏目
+  # contest: 6 是「电子设计竞赛」的赛事 id；其他赛事见 personas.CONTESTS 注释
   - key: cpipc
     enabled: true
+    contest: 6
+    max_pages: 3
+    allowed_hosts:
+      - cpipc.acge.org.cn
+
+  # 研创网「大赛通知」—— 覆盖 20 项主题赛事的公共通知（赛程一览、年度启动、暂停举办等）
+  - key: cpipc_pw
+    enabled: true
+    channel: notice
     max_pages: 2
+    allowed_hosts:
+      - cpipc.acge.org.cn
+
+  # 研创网「大赛新闻」—— 各赛事动态，价值低于通知，只取 1 页
+  - key: cpipc_pw
+    enabled: true
+    channel: news
+    max_pages: 1
+    allowed_hosts:
+      - cpipc.acge.org.cn
+
+  # 研创网「大赛文件」—— 章程、参赛说明、申报书等长期有效材料
+  - key: cpipc_pw
+    enabled: true
+    channel: document
+    max_pages: 1
     allowed_hosts:
       - cpipc.acge.org.cn
 
@@ -62,6 +92,45 @@ sources:
       - 电子设计竞赛
       - 研电赛
       - 研究生电子设计
+      - 创新实践系列大赛
+      - 研究生创新实践
     allowed_hosts:
       - www.cie.org.cn
       - cie.org.cn
+
+# ---------------------------------------------------------------------------
+# 官方赛程（《各主题赛事赛程一览》）与日程提醒
+#   include  : 只为这些赛事生成截止提醒与日历事件，避免 20 项赛事刷屏
+#   horizons : 在截止前第 N 天提醒（可多档）
+#   refresh_days : 赛程表缓存天数，官网一年只更新一两次
+# ---------------------------------------------------------------------------
+schedule:
+  enabled: true
+  refresh_days: 7
+  horizons: [30, 7, 3, 1]
+  include:
+    - 电子设计竞赛
+
+# ---------------------------------------------------------------------------
+# 人员视角（邮件分区顺序 = 阅读优先级）
+#   key 与 Worker / AI 提示词的 audience 枚举一一对应
+#   mail_to 留空表示跟随 MAIL_TO；填了则额外给该视角单独发一版
+# ---------------------------------------------------------------------------
+personas:
+  - key: student
+    name: 参赛学生
+    stages: [报名, 提交作品, 评审, 决赛, 公示, 获奖, 报销, 动态]
+    mail_to: ""
+  - key: advisor
+    name: 指导教师
+    stages: [报名, 提交作品, 评审, 决赛, 公示, 获奖, 报销, 动态]
+    mail_to: ""
+  - key: admin
+    name: 培养单位
+    stages: [资格审查, 缴费, 公示, 获奖, 报销, 承办]
+    mail_to: ""
+  - key: organizer
+    name: 分赛区 / 承办方
+    stages: [承办, 决赛]
+    mail_to: ""
+

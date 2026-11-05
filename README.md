@@ -55,7 +55,7 @@
 
 研电赛的赛事通知分散在多个主办方网站，人工刷新既费时又容易错过报名、评审与决赛节点。本项目把这件事自动化：
 
-- **每 10 分钟**检查两个官方渠道的列表页，用稳定 UID 与 `data/seen.json` 比对；
+- **每 10 分钟**检查研创网的多个栏目与主办方公告，用稳定 UID 与 `data/seen.json` 比对；
 - 只有发现新条目时才抓取详情页补摘要与附件，然后渲染成一封分组邮件；
 - 订阅者通过 Cloudflare Worker 自助完成订阅、登录、栏目偏好调整与退订，推送时按偏好过滤；
 - 每封邮件的退订链接**按邮箱单独签名**，附带 RFC 8058 一键退订头。
@@ -64,8 +64,13 @@
 
 | 数据源 | 栏目 | 说明 |
 |---|---|---|
-| [研创网 · 大赛通知](https://cpipc.acge.org.cn/cw/contestNews/list/6/1) | 报名 / 评审 / 决赛 | 官方赛事平台 |
-| [中国电子学会 · 通知公告](https://www.cie.org.cn/list_43/) | 赛事动态 | 主办方公告，按关键词过滤 |
+| [研创网 · 研电赛专区](https://cpipc.acge.org.cn/cw/contestNews/list/6/1) | 报名 / 评审 / 决赛 | 官方赛事平台，赛事 id=6 |
+| [研创网 · 大赛通知](https://cpipc.acge.org.cn/pw/notice/list/1) | 全站通知 | 赛程一览、年度启动、承办征集 |
+| [研创网 · 大赛新闻](https://cpipc.acge.org.cn/pw/news/list/1) | 赛事动态 | 各主题赛事新闻 |
+| [研创网 · 大赛文件](https://cpipc.acge.org.cn/pw/document/list/1) | 章程 / 材料 | 长期有效文件 |
+| [中国电子学会 · 通知公告](https://www.cie.org.cn/list_43/) | 主办方公告 | 按关键词过滤 |
+
+> 通知计划（人员视角、阶段矩阵、提醒节奏）见 [`docs/通知计划.md`](docs/通知计划.md)。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -89,6 +94,9 @@
 - **失败可见**：发信失败不写已读状态、下轮重试；Actions 失败告警 + 成功心跳；Resend webhook 验签后自动清理退信 / 投诉地址。
 - **AI 推送分析**：用 OpenAI 兼容接口（默认 DeepSeek）做分类、一句话摘要、紧急度判断与**公告正文里的真实事件日期抽取**；提示词独立存放在 `prompts/`，结果按内容指纹缓存。
 - **智能推送编排**：AI 判为 `critical` 的通知走「紧急快报」，无视日报/周报设置立即送达；低价值动态在摘要里折叠；邮件与归档页展示 AI 摘要与日程。
+- **官方赛程驱动**：解析《各主题赛事赛程一览》，把 19 项赛事的报名 / 提交 / 决赛写进日历，并在截止前 T-30 / T-7 / T-3 / T-1 发提醒——官网不发新通知也有信息。
+- **人员视角**：每条通知标注赛事、阶段（报名/资格审查/缴费/提交作品/评审/决赛/公示/获奖/报销/承办/动态）与面向人群（学生/导师/培养单位/赛区）；邮件顶部按角色分栏给出「各自要做的事」。
+- **视角级订阅**：`config.yaml` 的 `personas[].mail_to` 可给学生、导师、培养单位分别发专用版；未配置邮件地址时合并成一封综合版。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -308,11 +316,44 @@ AI 只在 **GitHub Actions 的 Python 端**运行，Cloudflare Worker 不调用�
 | `AI_MAX_BODY_CHARS` | `3000` | 单条正文截断长度 |
 
 提示词在 `prompts/` 目录，版本由 `prompts/manifest.yaml` 的 `active` 决定；
-改版本会让 `data/ai.json` 缓存全量失效重算。完整设计（调研、数据契约、
-防幻觉策略、降级链、成本）见 [AI 推送设计方案](docs/AI推送设计方案.md)。
+当前 `active: v2`，在 v1 的分类/摘要/紧急度/事件日期之外，额外输出
+**赛事名、阶段、面向人群、行动建议**四类字段。改版本会让 `data/ai.json`
+缓存全量失效重算。完整设计（调研、数据契约、防幻觉策略、降级链、成本）见
+[AI 推送设计方案](docs/AI推送设计方案.md)。
 
 > 即使不填 `AI_API_KEY`，日历修复依然生效：系统会渐进回填历史公告正文，
 > 用确定性规则抽出真实事件日。AI 只是把准确率从「规则」提升到「语义级」。
+
+### 通知计划配置
+
+`config.yaml` 里与「人员视角 / 赛程提醒」相关的段：
+
+```yaml
+max_age_days: 540            # 超过该天数的「新条目」只归档、不推送
+
+schedule:
+  enabled: true
+  refresh_days: 7            # 赛程表每周刷新一次
+  horizons: [30, 7, 3, 1]    # 截止前第 N 天提醒
+  include: [电子设计竞赛]     # 只为这些赛事生成提醒
+
+personas:
+  - key: student             # student / advisor / admin / organizer
+    name: 参赛学生
+    mail_to: ""              # 留空跟随 MAIL_TO；填了额外单独发一版
+```
+
+想额外抓取其他赛事专区（如创"芯"大赛 id=10）：
+
+```yaml
+sources:
+  - key: cpipc
+    contest: 10
+    max_pages: 2
+```
+
+> 完整的人员视角矩阵、阶段定义、触发规则与降噪策略见
+> [`docs/通知计划.md`](docs/通知计划.md)。
 
 本轮新增的可选配置：`RESEND_WEBHOOK_SECRET`（Resend → Webhooks 的签名密钥，端点填
 `https://<站点>/api/webhooks/resend`，勾选 `email.bounced` / `email.complained` / `suppression.added`）、
@@ -376,10 +417,10 @@ yds-notifier/
 ├── requirements.txt
 ├── prompts/                         # 提示词（纯文本，独立版本管理，不掺代码）
 │   ├── README.md                    # 编写规范 / 修改流程 / 安全硬约束
-│   ├── manifest.yaml                # active 版本注册表 + changelog
-│   ├── notices/                     # v1.system.md / v1.user.md
+│   ├── manifest.yaml                # active 版本注册表 + changelog（当前 v2）
+│   ├── notices/                     # v1/v2 system + user 模板
 │   ├── digest/                      # 摘要导语（预留）
-│   └── schemas/                     # analysis.schema.json + examples.json
+│   └── schemas/                     # analysis.v2.schema.json + examples.v2.json
 ├── scripts/
 │   ├── ops.sh                    # 运维总入口：doctor / status / deploy / check ...
 │   ├── lib.sh                    # 公共函数：配置读取 / 输出 / Wrangler 包装
@@ -392,6 +433,7 @@ yds-notifier/
 │   ├── 退订服务部署指南.md         # 退订链路与签名契约
 │   ├── 域名发信配置指南.md         # Resend + DNS 步骤
 │   ├── AI推送设计方案.md           # 调研 / 目录 / 数据契约 / 降级 / 成本
+│   ├── 通知计划.md                 # 人员视角矩阵 / 赛程提醒 / 降噪规则
 │   └── 改进评估与功能规划.md
 ├── worker/
 │   ├── src/index.ts              # 路由层

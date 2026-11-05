@@ -15,7 +15,7 @@ import re
 import sys
 import tempfile
 import time
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 
 from .ai.analyzer import analyze_notices
@@ -26,8 +26,10 @@ from .ai.schema import CATEGORIES, input_hash, parse_evidence_date, validate_res
 from .config import derive_base_url, derive_internal_base, settings
 from .mailer import build_html, build_subject, build_text
 from .models import Attachment, Notice
+from .personas import AUDIENCES, STAGES, infer_audiences, infer_contest, infer_stage
 from .publish import apply_analysis, build_payload, extract_deadline, payload_fingerprint
 from .recipients import Recipient, _valid
+from .schedule import ContestSchedule, ReminderLog, ScheduleStore, parse_schedule
 from .state import State, load_pending, pending_notices, save_pending
 from .unsub import build_list_unsubscribe_headers, build_unsubscribe_url, make_email_token
 
@@ -208,7 +210,7 @@ def main() -> int:
 
     print("\n[11] 提示词目录与输出契约")
     spec = load_prompt("notices")
-    check("提示词版本 = v1", spec.version == "v1", spec.version)
+    check("提示词版本 = v2", spec.version == "v2", spec.version)
     check("system 含 json（DeepSeek 前置条件）", "json" in spec.system.lower())
     check("system 声明不可信数据", "不可信" in spec.system)
     check("system 禁止模型换算日期", "换算" in spec.system and "原样复制" in spec.system)
@@ -226,6 +228,12 @@ def main() -> int:
     check("schema 分类白名单与代码一致",
           set(schema["properties"]["notices"]["items"]["properties"]["category"]["enum"])
           == set(CATEGORIES))
+    check("schema 阶段白名单与 personas 一致",
+          set(schema["properties"]["notices"]["items"]["properties"]["stage"]["enum"])
+          == set(STAGES) | {""})
+    check("schema 人群白名单与 personas 一致",
+          set(schema["properties"]["notices"]["items"]["properties"]["audiences"]["items"]["enum"])
+          == set(AUDIENCES))
     check("user 模板渲染出输入", "u-abc" in user_payload(
         spec, [{"uid": "u-abc", "title": "通知", "body": ""}], "2026-11-06"))
     examples = load_examples(spec)
@@ -234,13 +242,14 @@ def main() -> int:
     print("\n[12] AI 输出校验（模型提议、代码决定）")
     for case in examples:
         got = validate_response(
-            {"notices": [case["response"]]}, [case["input"]], "notices:v1"
+            {"notices": [case["response"]]}, [case["input"]], "notices:v2"
         )
         row = got.get(case["input"]["uid"], {})
         evs = row.get("events") or []
         exp = case["expect"]
-        check(f"{case['name']}：事件数", len(evs) == exp["events"],
-              f"got {len(evs)} expect {exp['events']}")
+        if "events" in exp:
+            check(f"{case['name']}：事件数", len(evs) == exp["events"],
+                  f"got {len(evs)} expect {exp['events']}")
         if "date" in exp and evs:
             check(f"{case['name']}：日期", evs[0]["date"] == exp["date"], evs[0]["date"])
         if "urgency" in exp:
@@ -249,6 +258,15 @@ def main() -> int:
         if "category" in exp:
             check(f"{case['name']}：分类", row.get("category") == exp["category"],
                   str(row.get("category")))
+        if "contest" in exp:
+            check(f"{case['name']}：赛事", row.get("contest") == exp["contest"],
+                  str(row.get("contest")))
+        if "stage" in exp:
+            check(f"{case['name']}：阶段", row.get("stage") == exp["stage"],
+                  str(row.get("stage")))
+        if "audiences" in exp:
+            check(f"{case['name']}：人群", row.get("audiences") == exp["audiences"],
+                  str(row.get("audiences")))
     check("全年份日期直接解析", parse_evidence_date("2026年11月25日", "2026-08-05") == "2026-11-25")
     check("无年份以发布日期补年", parse_evidence_date("8 月 10 日", "2026-08-05") == "2026-08-10")
     check("跨年公告进位到下一年", parse_evidence_date("1 月 10 日", "2026-12-20") == "2027-01-10")
@@ -373,6 +391,74 @@ def main() -> int:
     fallback.raw_body = "决赛于 8 月 10 日举行。"
     fb_item = build_payload([fallback])["notices"][0]
     check("AI 关闭时仍有等价事件", fb_item["aiEvents"][0]["date"] == "2026-08-10")
+
+    print("\n[16] 赛事 / 阶段 / 人员视角")
+    check("研电赛简称归一", infer_contest("第二十一届研电赛报名通知") == "电子设计竞赛")
+    check("EDA 优先于创芯", infer_contest("创芯大赛—EDA精英挑战赛") == "EDA精英挑战赛")
+    check("识别不出时默认研电赛", infer_contest("某通知") == "电子设计竞赛")
+    check("报名阶段", infer_stage("关于报名截止时间延长的通知") == "报名")
+    check("资格审查阶段", infer_stage("关于做好参赛资格审核工作的通知") == "资格审查")
+    check("回顾类判为动态", infer_stage("全国总决赛圆满落幕") == "动态")
+    check("报销优先于决赛", infer_stage("总决赛报销所需文件") == "报销")
+    aud = infer_audiences("资格审查", "请各研究生培养单位完成审核")
+    check("培养单位进入管理员视角", "admin" in aud, str(aud))
+    check("动态不打扰管理员", "admin" not in infer_audiences("动态", "总决赛圆满落幕"))
+    auto = Notice(source="测试", source_key="t", title="关于报名截止的通知", url="https://x/1")
+    check("构造时自动补全视角字段", auto.stage == "报名" and "student" in auto.audiences
+          and bool(auto.action))
+    check("低价值动态标记", auto.is_low_value is False)
+    check("倒计时判为低价值", _notice("倒计时3天丨总决赛即将开幕").is_low_value is True)
+    future = _notice("报名通知", uid="f1")
+    future.deadline = (date.today() + timedelta(days=5)).isoformat()
+    check("距截止天数计算", future.days_to_deadline == 5, str(future.days_to_deadline))
+    r_student = Recipient(email="a@b.com", audiences=frozenset({"student"}))
+    r_admin = Recipient(email="c@d.com", audiences=frozenset({"admin"}))
+    check("视角过滤命中", r_student.wants_notice(auto) and not r_admin.wants_notice(auto))
+    check("未设置视角收全量", Recipient(email="e@f.com").wants_notice(auto))
+
+    print("\n[17] 官方赛程解析与提醒")
+    table = """
+    <table>
+      <tr><td>序号</td><td>主题赛事</td><td>报名时间</td><td>提交作品时间</td><td>决赛时间</td></tr>
+      <tr><td>4</td><td>电子设计竞赛</td><td>4月3日-6月20日</td><td>4月3日-6月20日</td><td>8月11日-15日</td></tr>
+      <tr><td>9</td><td>公共管理案例大赛</td><td>12月20日-1月10日</td><td>1月13日-3月31日</td><td>6月13日-14日</td></tr>
+      <tr><td>10</td><td>未来飞行器创新大赛</td><td>各赛道赛程安排不同</td><td></td><td></td></tr>
+    </table>"""
+    rows = parse_schedule(table, 2026, "https://cpipc.acge.org.cn/x")
+    check("解析出 3 行赛事", len(rows) == 3, str(len(rows)))
+    edc = next(r for r in rows if r.contest == "电子设计竞赛")
+    check("报名时间范围", edc.signup_start == "2026-04-03" and edc.signup_end == "2026-06-20")
+    check("决赛单日期补全", edc.final_start == "2026-08-11" and edc.final_end == "2026-08-15")
+    pm = next(r for r in rows if "公共管理" in r.contest)
+    check("跨年报名进位", pm.signup_start == "2026-12-20" and pm.signup_end == "2027-01-10")
+    check("无日期不瞎猜", rows[2].signup_end == "" and rows[2].final_start == "")
+    with tempfile.TemporaryDirectory() as tmp:
+        store = ScheduleStore(str(Path(tmp) / "schedule.json"))
+        check("空缓存标记 stale", store.empty and store.stale())
+        store.replace(rows, 2026, "https://cpipc.acge.org.cn/x")
+        store.save()
+        again = ScheduleStore(str(Path(tmp) / "schedule.json"))
+        check("赛程落盘可读回", len(again.contests) == 3 and again.year == 2026)
+        rem = again.reminders(date(2026, 6, 13), [7], ["电子设计竞赛"])
+        check("T-7 生成报名截止提醒", len(rem) == 1 and rem[0].stage == "报名", str(len(rem)))
+        check("提醒带截止日", rem[0].deadline == "2026-06-20")
+        check("提醒面向学生", "student" in rem[0].audiences, str(rem[0].audiences))
+        check("提醒不带低价值标记", rem[0].is_low_value is False)
+        check("未到窗口不提醒", not again.reminders(date(2026, 6, 10), [7], ["电子设计竞赛"]))
+        log = ReminderLog(str(Path(tmp) / "reminders.json"))
+        check("首次提醒待发", len(log.pending(rem, date(2026, 6, 13))) == 1)
+        log.mark(rem, date(2026, 6, 13))
+        check("同日不重复提醒", not log.pending(rem, date(2026, 6, 13)))
+        log.save()
+        check("提醒日志落盘", len(ReminderLog(str(Path(tmp) / "reminders.json")).sent) == 1)
+        store_payload = again.payload(["电子设计竞赛"])
+        check("赛程载荷只含指定赛事", len(store_payload) == 1
+              and store_payload[0]["contest"] == "电子设计竞赛")
+        with_sched = build_payload([n5], schedule=store_payload)
+        check("载荷含 schedule", with_sched.get("schedule") and len(with_sched["schedule"]) == 1)
+        fp = payload_fingerprint(with_sched)
+        with_sched["schedule"][0]["signupEnd"] = "2026-06-27"
+        check("赛程变化触发重推", payload_fingerprint(with_sched) != fp)
 
     print(f"\n结果：{PASS} 项通过，{FAIL} 项失败")
     return 1 if FAIL else 0

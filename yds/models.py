@@ -49,6 +49,30 @@ class Notice:
     ai_confidence: float = 0.0
     ai_version: str = ""           # 提示词版本，升版触发缓存失效
 
+    # --- 赛事 / 阶段 / 人员视角（规则先填，AI v2 可覆盖）---
+    contest: str = ""              # 标准赛事名，见 personas.CONTESTS
+    stage: str = ""                # 报名 / 提交作品 / 评审 / 决赛 ...
+    audiences: List[str] = field(default_factory=list)   # student / advisor / admin / organizer
+    action: str = ""               # 「你需要做什么」一句话
+
+    def __post_init__(self) -> None:
+        # 规则兜底：保证任何构造路径（列表页 / 详情页 / 历史重建）都有完整视角字段
+        from .personas import (
+            action_for,
+            infer_audiences,
+            infer_contest,
+            infer_stage,
+        )
+
+        if not self.contest:
+            self.contest = infer_contest(self.title, self.source)
+        if not self.stage:
+            self.stage = infer_stage(self.title, self.category, self.raw_body)
+        if not self.audiences:
+            self.audiences = infer_audiences(self.stage, self.title)
+        if not self.action:
+            self.action = action_for(self.stage, self.title)
+
     @property
     def date_text(self) -> str:
         return self.published.isoformat() if self.published else "日期未知"
@@ -79,6 +103,11 @@ class Notice:
             "deadline": self.deadline,
             "attachments": [{"name": a.name, "url": a.url} for a in self.attachments],
             "changeKind": self.change_kind,
+            # 赛事 / 阶段 / 人员视角：邮件分区、日历标签、归档筛选共用
+            "contest": self.contest,
+            "stage": self.stage,
+            "audiences": list(self.audiences[:4]),
+            "action": self.action,
             # AI 字段：Worker 侧 feed.ts 的 normalizeNotice 白名单必须同步
             "aiCategory": self.ai_category,
             "aiSummary": self.ai_summary,
@@ -105,6 +134,10 @@ class Notice:
             uid=str(raw.get("uid") or ""),
             change_kind=str(raw.get("changeKind") or "new"),
             deadline=str(raw.get("deadline") or ""),
+            contest=str(raw.get("contest") or ""),
+            stage=str(raw.get("stage") or ""),
+            audiences=[str(a) for a in (raw.get("audiences") or []) if isinstance(a, str)][:4],
+            action=str(raw.get("action") or ""),
             ai_category=str(raw.get("aiCategory") or ""),
             ai_summary=str(raw.get("aiSummary") or ""),
             ai_urgency=str(raw.get("aiUrgency") or ""),
@@ -146,6 +179,39 @@ class Notice:
             if k in self.title:
                 score -= 3
         return score
+
+    @property
+    def is_low_value(self) -> bool:
+        """倒计时 / 回顾 / 花絮类：摘要邮件里折叠，不进紧急通道。"""
+        if self.stage == "动态":
+            return True
+        if any(k in self.title for k in LOW_PRIORITY + ("倒计时",)):
+            return True
+        return False
+
+    @property
+    def event_dates(self) -> List[str]:
+        """所有可进日历的日期（AI 事件优先，其次规则 deadline）。"""
+        days = [str(e.get("date") or "") for e in self.ai_events if isinstance(e, dict)]
+        days = [d for d in days if d]
+        if not days and self.deadline:
+            days = [self.deadline]
+        return days
+
+    @property
+    def days_to_deadline(self) -> int | None:
+        """距最近截止日的天数；无截止日或已过期返回 None。"""
+        from datetime import date as _date
+
+        days = sorted(d for d in self.event_dates if d)
+        if not days:
+            return None
+        try:
+            target = _date.fromisoformat(days[0])
+        except ValueError:
+            return None
+        delta = (target - _date.today()).days
+        return delta if delta >= 0 else None
 
 
 def make_uid(source_key: str, ident: str) -> str:

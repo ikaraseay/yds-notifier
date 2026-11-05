@@ -36,19 +36,23 @@ CATEGORY_TO_KEY: Dict[str, str] = {
 }
 
 ALL_CATEGORIES = ("registration", "review", "final", "updates")
+ALL_AUDIENCES = ("student", "advisor", "admin", "organizer")
 
 
 @dataclass
 class Recipient:
-    """一个收件人及其订阅的栏目。
+    """一个收件人及其订阅的栏目 / 人员视角。
 
     `categories is None` 表示不限制（站长邮箱，或偏好字段缺失时的降级行为）。
+    `audiences` 同理：None 表示收全部视角，否则只收命中的视角。
     """
 
     email: str
     categories: Optional[FrozenSet[str]] = None
     frequency: str = "instant"   # instant | daily | weekly
     paused_until: str = ""       # YYYY-MM-DD，含当天
+    audiences: Optional[FrozenSet[str]] = None
+    label: str = ""              # 人物角色备注，仅用于日志
 
     def wants(self, category: str) -> bool:
         if self.categories is None:
@@ -56,6 +60,14 @@ class Recipient:
         key = CATEGORY_TO_KEY.get(category)
         # 映射不到的陌生分类：宁可漏发也不误发，避免打扰
         return bool(key) and key in self.categories
+
+    def wants_notice(self, notice) -> bool:
+        """栏目偏好 + 人员视角双重过滤。"""
+        if not self.wants(notice.category):
+            return False
+        if self.audiences is None:
+            return True
+        return bool(self.audiences & set(notice.audiences or []))
 
     def is_paused(self, today: date | None = None) -> bool:
         if not self.paused_until:
@@ -144,11 +156,17 @@ def fetch_subscribers(
             paused = str(item.get("pausedUntil") or "")
             if paused and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", paused):
                 paused = ""
+            raw_aud = item.get("audiences")
+            audiences = None
+            if isinstance(raw_aud, list):
+                picked = frozenset(a for a in raw_aud if a in ALL_AUDIENCES)
+                audiences = picked or None
             out.append(Recipient(
                 email=email,
                 categories=_parse_prefs(item.get("prefs")),
                 frequency=freq,
                 paused_until=paused,
+                audiences=audiences,
             ))
     else:
         # 旧版：只有邮箱列表，按不限栏目处理
@@ -162,11 +180,16 @@ def fetch_subscribers(
 
 
 def resolve_recipients(
-    static_raw: str, api_url: str = "", token: str = "", fallback_url: str = ""
+    static_raw: str,
+    api_url: str = "",
+    token: str = "",
+    fallback_url: str = "",
+    personas: Optional[List[dict]] = None,
 ) -> List[Recipient]:
-    """合并静态收件人与网页订阅者，去重后保持稳定顺序。
+    """合并静态收件人、人员视角邮箱与网页订阅者，去重后保持稳定顺序。
 
-    静态收件人（站长）不受栏目限制，永远收全量；同一邮箱出现在两处时以全量为准。
+    静态收件人（站长）不受栏目 / 视角限制，永远收全量；
+    同一邮箱出现在多处时以全量为准，避免同一个人收到两版邮件。
     """
     seen = set()
     ordered: List[Recipient] = []
@@ -176,6 +199,24 @@ def resolve_recipients(
             continue
         seen.add(e)
         ordered.append(Recipient(email=e, categories=None))
+
+    # 人员视角专用邮箱（config.yaml 的 personas[].mail_to）
+    for p in (personas or []):
+        if not isinstance(p, dict):
+            continue
+        key = str(p.get("key") or "")
+        if key not in ALL_AUDIENCES:
+            continue
+        for e in split_recipients(str(p.get("mail_to") or "")):
+            if e in seen or not _valid(e):
+                continue
+            seen.add(e)
+            ordered.append(Recipient(
+                email=e,
+                categories=None,
+                audiences=frozenset({key}),
+                label=str(p.get("name") or key),
+            ))
 
     for r in fetch_subscribers(api_url, token, fallback_url=fallback_url):
         if r.email in seen:

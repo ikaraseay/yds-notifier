@@ -12,8 +12,9 @@ from __future__ import annotations
 import argparse
 import logging
 import os
+import re
 import sys
-from datetime import date
+from datetime import date, timedelta
 from typing import Dict, List
 
 import yaml
@@ -36,6 +37,13 @@ from .publish import (
 )
 from .recipients import resolve_recipients, split_recipients
 from .senders import build_client
+from .schedule import (
+    ReminderLog,
+    ScheduleStore,
+    find_schedule_notice,
+    parse_schedule,
+    schedule_year,
+)
 from .sources import BaseSource, build_sources
 from .state import State
 from .unsub import build_unsubscribe_url
@@ -70,7 +78,16 @@ def collect(sources: List[BaseSource], enrich: bool = True) -> List[Notice]:
             elif len(item.attachments) > len(prev.attachments):
                 item.source = f"{prev.source} / {item.source}"
                 merged[item.uid] = item
-    return list(merged.values())
+    # 同一内容可能同时出现在「大赛通知」与「大赛文件」，按标题去重，
+    # 保留附件 / 正文更完整的那条，避免同一件事发两遍。
+    deduped: Dict[str, Notice] = {}
+    for item in sorted(
+        merged.values(),
+        key=lambda x: (len(x.attachments), len(x.summary), len(x.raw_body)),
+        reverse=True,
+    ):
+        deduped.setdefault(re.sub(r"\s+", "", item.title), item)
+    return list(deduped.values())
 
 
 def collect_meta(sources: List[BaseSource]) -> List[Notice]:
@@ -126,6 +143,7 @@ def main(argv: List[str] | None = None) -> int:
     recipients = resolve_recipients(
         static_to, settings.subscribe_api_url, settings.subscribe_api_token,
         fallback_url=fallback_list_url,
+        personas=cfg.get("personas") or [],
     )
     needs_send = not (args.check or args.preview)
     if needs_send:
@@ -146,6 +164,38 @@ def main(argv: List[str] | None = None) -> int:
         log.error("列表页 0 条：疑似官网改版或抓取全部失败，请检查数据源与解析器")
         return 1
 
+    # --- 官方赛程：每周刷新一次，驱动日历与 T-30/T-7/T-3/T-1 提醒 ------------
+    today_date = date.today()
+    sched_cfg = cfg.get("schedule") or {}
+    sched_enabled = bool(sched_cfg.get("enabled", True))
+    sched_include = [str(x) for x in (sched_cfg.get("include") or [])]
+    sched_horizons = [int(x) for x in (sched_cfg.get("horizons") or [30, 7, 3, 1])]
+    schedule = ScheduleStore(os.path.join(ROOT, "data/schedule.json"))
+    if sched_enabled and (schedule.empty or schedule.stale(int(sched_cfg.get("refresh_days", 7)))):
+        target = find_schedule_notice(meta)
+        if target:
+            rows = []
+            try:
+                rows = parse_schedule(
+                    fetch.get_text(target.url), schedule_year(target.title, today_date.year), target.url
+                )
+            except Exception as exc:  # noqa: BLE001 - 赛程失败不能影响通知主流程
+                log.warning("赛程表解析失败，沿用旧缓存：%s", str(exc)[:160])
+            if rows:
+                schedule.replace(rows, schedule_year(target.title, today_date.year), target.url)
+                if not args.check and not args.preview:
+                    schedule.save()
+                log.info("赛程表已更新：%s 项赛事（%s 年度）", len(rows), schedule.year)
+        else:
+            log.info("本轮列表中没有「赛程一览」，跳过刷新（沿用缓存 %s 项）", len(schedule.contests))
+
+    reminder_pool = (
+        schedule.reminders(today_date, sched_horizons, sched_include)
+        if sched_enabled else []
+    )
+    rem_log = ReminderLog(os.path.join(ROOT, "data/reminders.json"))
+    reminders = rem_log.pending(reminder_pool, today_date)
+
     state_path = args.state or os.path.join(ROOT, cfg.get("state_file", "data/seen.json"))
     state = State(state_path, keep=int(cfg.get("state_keep", 800)))
     if state.corrupt:
@@ -155,13 +205,23 @@ def main(argv: List[str] | None = None) -> int:
 
     changed_uids = set()
     candidates: List[Notice] = []
+    # 扩充数据源后，历史文件（2024/2025 年度报告等）会被当成「新条目」。
+    # 超过 max_age_days 的只归档、不推送，避免首次升级群发陈年旧文。
+    max_age = max(30, int(cfg.get("max_age_days", 540)))
+    cutoff = today_date - timedelta(days=max_age)
+    stale_skipped = 0
     for n in meta:
         kind = "new" if first_run else state.classify(n)
+        if kind == "new" and n.published and n.published < cutoff:
+            stale_skipped += 1
+            continue
         if kind in ("new", "changed"):
             n.change_kind = kind
             candidates.append(n)
             if kind == "changed":
                 changed_uids.add(n.uid)
+    if stale_skipped:
+        log.info("跳过 %s 条超过 %s 天的历史条目（仍会归档，不推送）", stale_skipped, max_age)
 
     # --- 每日一次详情抽检：发现同一文章 ID 下的正文 / 附件修订 ---------------
     today = date.today().isoformat()
@@ -209,7 +269,13 @@ def main(argv: List[str] | None = None) -> int:
     if args.check:
         for n in sort_notices(list(merged.values()) or meta):
             flag = "【更新】" if n.change_kind == "changed" else ""
-            log.info("%s | %-8s | %-14s | %s%s", n.date_text, n.category, n.source, flag, n.title)
+            log.info("%s | %-8s | %-6s | %-12s | %s%s",
+                     n.date_text, n.category, n.stage,
+                     "/".join(n.audiences) or "-", flag, n.title)
+        if reminders:
+            log.info("--- 日程提醒（今日应发 %s 条）---", len(reminders))
+            for n in reminders:
+                log.info("%s | %s | %s", n.deadline, n.stage, n.title)
         return 0
 
     # --- 归档全集：列表页 + 本轮详情 + 历史重建 -------------------------------
@@ -287,13 +353,17 @@ def main(argv: List[str] | None = None) -> int:
     # 用内容指纹限流，只有真的变了才写 Worker KV；失败只告警，绝不阻断邮件主流程。
     archive_changed = False
     if not args.dry_run and not args.preview:
-        payload = build_payload(list(all_items.values()), int(cfg.get("notices_limit", 200)))
+        payload = build_payload(
+            list(all_items.values()),
+            int(cfg.get("notices_limit", 200)),
+            schedule=schedule.payload(sched_include) if sched_enabled else None,
+        )
         fp = payload_fingerprint(payload)
         if fp != state.published_hash and publish_notices(payload):
             state.set_published_hash(fp)
             archive_changed = True
 
-    if not merged and not args.preview:
+    if not merged and not args.preview and not reminders:
         # 没有新内容：只在抽检刷新过指纹或归档有更新时才落盘，避免每 10 分钟产生一次 git 提交
         if full_check or archive_changed:
             state.save()
@@ -317,11 +387,12 @@ def main(argv: List[str] | None = None) -> int:
         log.info("预览已写入 %s", args.preview)
         return 0
 
-    if not fresh:
+    if not fresh and not reminders:
         log.info("没有新通知，本轮不发信")
         return 0
 
-    log.info("本轮待推 %s 条（新增 %s / 更新 %s）", len(fresh), len(fresh) - len(changed_uids), len(changed_uids))
+    log.info("本轮待推 %s 条（新增 %s / 更新 %s），日程提醒 %s 条",
+             len(fresh), len(fresh) - len(changed_uids), len(changed_uids), len(reminders))
     for n in fresh:
         log.info("  %s %s | %s", "【更新】" if n.change_kind == "changed" else "+", n.date_text, n.title)
 
@@ -330,6 +401,9 @@ def main(argv: List[str] | None = None) -> int:
             settings.unsub_url, settings.unsub_secret, recipients[0].email
         )
         print(build_text(fresh, site=settings.site_name, unsubscribe_url=sample))
+        if reminders:
+            print("\n===== 日程提醒（独立一封）=====")
+            print(build_text(reminders, site=settings.site_name, unsubscribe_url=sample))
         log.info("dry-run 结束，未发信、未更新状态")
         return 0
 
@@ -337,7 +411,7 @@ def main(argv: List[str] | None = None) -> int:
     pending_path = os.path.join(ROOT, "data/pending.json")
     result = dispatch(
         sender=sender, notices=fresh, recipients=recipients, cfg=cfg,
-        pending_path=pending_path,
+        pending_path=pending_path, reminders=reminders,
     )
     log.info(
         "完成：%s 条通知 × %s 个收件人，成功发出 %s 封，摘要 %s",
@@ -349,6 +423,13 @@ def main(argv: List[str] | None = None) -> int:
         log.error("以下收件人发送失败（本轮不标记已读，下轮重试）：%s", ", ".join(result.failed))
         state.save()  # 只保存抽检指纹 / 归档指纹，不保存 mark
         return 1
+
+    # 提醒是时点性的：发送成功才记账，失败下轮重试
+    if reminders:
+        rem_log.mark(reminders, today_date)
+        rem_log.prune(today_date)
+        rem_log.save()
+        log.info("已记录 %s 条日程提醒，避免重复发送", len(reminders))
 
     # 首次运行要把未推送的历史条目也标为已读；尽量用抓过详情的版本存指纹
     if first_run:
