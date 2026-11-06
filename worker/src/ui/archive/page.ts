@@ -62,7 +62,7 @@ function renderHeader(hasFilter: boolean): string {
   return `<header class="header">
     <div class="dot"></div>
     <h1>研电赛<span class="hl">通知</span></h1>
-    <p class="sub">中国研究生创新实践系列大赛 · 官方通知一站式速览</p>
+    <p class="sub">中国研究生创新实践系列大赛 · 官方通知聚合</p>
     <div class="nav">
       <a href="/">控制台 / 个人日历</a><a href="/feed.xml">RSS 订阅</a>${
         hasFilter ? '<a href="/archive">清除筛选</a>' : ''
@@ -145,7 +145,7 @@ export function renderArchive({ notices, schedule, generatedAt, url }: ArchiveDa
       <a href="https://www.cie.org.cn" target="_blank" rel="noopener noreferrer">中国电子学会</a>
       <span class="sep">·</span> 共 ${all.length} 条，覆盖 ${contests.length} 项主题赛事
     </div>
-    <div>日历按订阅者角色与关注赛事单独签发，未登录不提供公共日历。</div>
+    <div>日历为每个订阅者单独生成，登录控制台即可复制自己的地址。</div>
   </div>
 
   <footer class="footer">

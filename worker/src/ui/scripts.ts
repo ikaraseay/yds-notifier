@@ -36,12 +36,12 @@ export const LOGIN_SCRIPT = `
     }).then(function (r) { return r.json(); }).then(function (d) {
       feedback(d.ok ? 'ok' : 'err', d.message || (d.ok ? '登录邮件已发出' : '提交失败，请稍后再试'));
       if (d.ok) { btn.textContent = '已发送'; return; }
-      btn.textContent = '进入控制台';
+      btn.textContent = '发送登录邮件';
     }).catch(function () {
-      feedback('err', '网络出现问题，请稍后再试');
-      btn.textContent = '进入控制台';
+      feedback('err', '网络出了点问题，请稍后再试');
+      btn.textContent = '发送登录邮件';
     }).then(function () {
-      if (btn.textContent === '进入控制台') btn.disabled = false;
+      if (btn.textContent === '发送登录邮件') btn.disabled = false;
     });
   });
 })();
@@ -142,7 +142,7 @@ export const PREFS_SCRIPT = `
     try {
       localStorage.setItem(storeKey, JSON.stringify({ at: stagedAt, body: JSON.stringify(collect()) }));
     } catch (e) {}
-    showBar('改动已记录，' + minutes() + ' 分钟后自动保存');
+    showBar('有未保存的更改，' + minutes() + ' 分钟后自动保存');
     schedule();
   }
 
@@ -217,7 +217,7 @@ export const PREFS_SCRIPT = `
       applyPayload(JSON.parse(saved.body));
       stagedAt = saved.at || 0;
       if (!stagedAt || Date.now() - stagedAt >= delay) { commit(); return; }
-      showBar('有改动待保存，' + minutes() + ' 分钟内自动生效');
+      showBar('有未保存的更改，' + minutes() + ' 分钟后自动保存');
       schedule();
     } catch (e) {}
   })();
@@ -249,7 +249,7 @@ export const PREFS_SCRIPT = `
         resend.disabled = false;
       })
       .catch(function () {
-        feedback('err', '网络出现问题，请稍后再试');
+        feedback('err', '网络出了点问题，请稍后再试');
         resend.disabled = false;
       });
   });
@@ -280,7 +280,7 @@ export const PREFS_SCRIPT = `
 
   var del = document.getElementById('del');
   if (del) del.addEventListener('click', function () {
-    if (!confirm('注销后账号、订阅记录和栏目设置都会被删除，且无法恢复。确定继续吗？')) return;
+    if (!confirm('注销会删除账号、订阅记录和全部设置，且无法恢复。确定注销吗？')) return;
     del.disabled = true;
     fetch('/api/delete-account', { method: 'POST' }).then(function () {
       location.href = '/?deleted=1';

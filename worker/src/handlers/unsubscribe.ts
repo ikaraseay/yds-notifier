@@ -171,7 +171,8 @@ export async function handleUnsubscribe(req: Request, url: URL, env: Env): Promi
   return messagePage({
     title: "已退订",
     heading: "已退订",
-    bodyHtml: `${esc(email)} 已从订阅列表移除。之后不会再收到邮件。账号还留着，想恢复的话重新登录控制台即可。`,
+    bodyHtml: `已退订，之后不会再给 <b>${esc(email)}</b> 发邮件。` +
+      `账号会保留，重新登录控制台即可恢复订阅。`,
     extraHtml: `<a class="btn-secondary" href="/">重新登录</a>`,
   });
 }

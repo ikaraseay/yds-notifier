@@ -162,20 +162,6 @@ const magicPathOf = (email) => {
   return u.pathname + u.search;
 };
 
-/** 从确认订阅邮件里取出 /confirm?c= 链接 */
-const confirmPathOf = (email) => {
-  const m = sent.filter(
-    (x) => x.to[0] === email && String(x.subject).includes("请确认订阅"),
-  ).pop();
-  assert.ok(m, `没有发给 ${email} 的确认订阅邮件`);
-  const raw = m.html.match(/href="([^"]*\/confirm\?c=[^"]*)"/)[1].replace(/&amp;/g, "&");
-  const u = new URL(raw);
-  return u.pathname + u.search;
-};
-
-/** 走完双重确认，返回确认页响应 */
-const confirmOf = (email) => call(confirmPathOf(email));
-
 /** 从 set-cookie 里抠出会话 token */
 const sidOf = (resp) => {
   const raw = resp.headers.get("set-cookie") || "";
@@ -198,7 +184,7 @@ const check = (name, cond, extra = "") => {
   console.log("\n[1] 首页 = 登录页");
   let r = await call("/");
   check("返回 200", r.status === 200);
-  check("是登录表单", r.text.includes('id="email"') && r.text.includes("进入控制台"));
+  check("是登录表单", r.text.includes('id="email"') && r.text.includes("发送登录邮件"));
   check("有 CSP 头", (r.headers.get("content-security-policy") || "").includes("default-src 'none'"));
   check("有 X-Frame-Options", r.headers.get("x-frame-options") === "DENY");
   check("未登录不写会话", !sidOf(r));
@@ -215,7 +201,7 @@ const check = (name, cond, extra = "") => {
   const email = "student@qq.com";
   r = await post("/api/login", { email }, "9.9.9.1");
   check("返回 200", r.status === 200, r.text);
-  check("提示已发出", r.text.includes("登录邮件已发出"));
+  check("提示已发出（带收件地址）", r.text.includes("登录邮件已发到") && r.text.includes(email), r.text);
   const loginMail = sent.find((m) => m.to[0] === email);
   check("确实发了信", !!loginMail);
   check("主题含登录", loginMail.subject.includes("登录"));
@@ -245,18 +231,23 @@ const check = (name, cond, extra = "") => {
       userRec.prefs.updates === false,
     JSON.stringify(userRec.prefs),
   );
-  check("待确认状态不进名单", (await env.SUBS.get("sub:" + email)) === null);
+  check("点一次即加入订阅列表", (await env.SUBS.get("sub:" + email)) !== null);
   check(
-    "已发确认订阅邮件",
-    sent.some((m) => m.to[0] === email && String(m.subject).includes("请确认订阅")),
+    "不再发第二封确认邮件",
+    !sent.some((m) => m.to[0] === email && String(m.subject).includes("请确认订阅")),
   );
-  const cr = await confirmOf(email);
-  check("确认页返回成功", cr.status === 200 && cr.text.includes("订阅"), cr.status);
   check(
-    "确认后发欢迎邮件",
+    "点链接即发欢迎邮件",
     sent.some((m) => m.to[0] === email && String(m.subject).includes("订阅成功")),
   );
-  check("确认后加入订阅列表", (await env.SUBS.get("sub:" + email)) !== null);
+  check(
+    "登录邮件首封写明完成订阅",
+    loginMail.html.includes("完成订阅"),
+  );
+  check(
+    "用户状态为已确认",
+    JSON.parse(await env.SUBS.get("user:" + email)).status === "confirmed",
+  );
   check("订阅数=1", (await env.SUBS.get("meta:count")) === "1");
   check("已通知站长", sent.some((m) => m.to[0] === "admin@qq.com" && m.subject.includes("新订阅")));
 
@@ -366,7 +357,6 @@ const check = (name, cond, extra = "") => {
   const e3 = "again@qq.com";
   await post("/api/login", { email: e3 }, "9.9.9.5");
   r = await call(magicPathOf(e3));
-  await confirmOf(e3);
   const sid3a = sidOf(r);
   await call("/api/prefs", {
     method: "POST",
@@ -403,7 +393,6 @@ const check = (name, cond, extra = "") => {
   env.RATE = new MockDO();
   await post("/api/login", { email: e3 }, "9.9.9.8");
   r = await call(magicPathOf(e3));
-  await confirmOf(e3);
   const sid3 = sidOf(r);
   const reborn = JSON.parse(await env.SUBS.get("user:" + e3));
   check("偏好回到默认", reborn.prefs.updates === false, JSON.stringify(reborn.prefs));
@@ -458,7 +447,6 @@ const check = (name, cond, extra = "") => {
 
   check("cool@qq.com 未点链接所以没有账号", (await env.SUBS.get("user:" + e2)) === null);
   r = await call(magicPathOf(e2));
-  await confirmOf(e2);
   const e2sid = sidOf(r);
   await call("/api/prefs", {
     method: "POST",
@@ -688,22 +676,55 @@ const check = (name, cond, extra = "") => {
   wr = await worker.fetch(whReq(whSig), { ...whEnv, RESEND_WEBHOOK_SECRET: "" });
   check("未配置密钥时 fail-closed 503", wr.status === 503, wr.status);
 
-  console.log("\n[29] 关闭 double opt-in 的兼容路径");
-  const legacyEnv = { ...env, DOUBLE_OPT_IN: "false", SUBS: new MockKV(), RATE: new MockDO() };
+  console.log("\n[29] 重复登录幂等：欢迎邮件不重发");
+  const legacyEnv = { ...env, SUBS: new MockKV(), RATE: new MockDO() };
+  const lEmail = "legacy@qq.com";
   let lresp = await worker.fetch(new Request("https://yds.workers.dev/api/login", {
     method: "POST",
     headers: { "Content-Type": "application/json", "CF-Connecting-IP": "3.3.3.1" },
-    body: JSON.stringify({ email: "legacy@qq.com" }),
+    body: JSON.stringify({ email: lEmail }),
   }), legacyEnv);
-  check("旧模式登录 200", lresp.status === 200, lresp.status);
+  check("登录 200", lresp.status === 200, lresp.status);
   lresp = await worker.fetch(
-    new Request("https://yds.workers.dev" + magicPathOf("legacy@qq.com")), legacyEnv,
+    new Request("https://yds.workers.dev" + magicPathOf(lEmail)), legacyEnv,
   );
-  check("旧模式点链接直接进名单", (await legacyEnv.SUBS.get("sub:legacy@qq.com")) !== null);
+  check("首次点链接直接进名单", (await legacyEnv.SUBS.get("sub:" + lEmail)) !== null);
+  // 第二次完整登录：换新 DO 绕过发信冷却
+  legacyEnv.RATE = new MockDO();
+  await worker.fetch(new Request("https://yds.workers.dev/api/login", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "CF-Connecting-IP": "3.3.3.2" },
+    body: JSON.stringify({ email: lEmail }),
+  }), legacyEnv);
+  lresp = await worker.fetch(
+    new Request("https://yds.workers.dev" + magicPathOf(lEmail)), legacyEnv,
+  );
+  check("二次点链接仍成功", lresp.status === 302, lresp.status);
+  check(
+    "欢迎邮件只发一封",
+    sent.filter((m) => m.to[0] === lEmail && String(m.subject).includes("订阅成功")).length === 1,
+  );
+  check("订阅计数不重复", (await legacyEnv.SUBS.get("meta:count")) === "1");
 
-  console.log("\n[30] 确认链接一次性");
-  r = await call(confirmPathOf(email));
-  check("重复确认返回 400", r.status === 400, r.status);
+  console.log("\n[30] 存量确认链接一次性（兼容旧邮件）");
+  const confEnv = { ...env, SUBS: new MockKV(), RATE: new MockDO() };
+  const cEmail = "oldconf@qq.com";
+  await confEnv.SUBS.put("user:" + cEmail, JSON.stringify({
+    email: cEmail, createdAt: "2026-11-01", lastLogin: "2026-11-01", status: "pending",
+  }));
+  const cNonce = "cd".repeat(24);
+  await confEnv.SUBS.put(
+    "confirm:" + crypto.createHash("sha256").update(cNonce).digest("hex"),
+    JSON.stringify({ email: cEmail, exp: Date.now() + 3600_000 }),
+  );
+  let cres = await worker.fetch(
+    new Request("https://yds.workers.dev/confirm?c=" + cNonce), confEnv,
+  );
+  check("存量确认链接有效", cres.status === 200, cres.status);
+  cres = await worker.fetch(
+    new Request("https://yds.workers.dev/confirm?c=" + cNonce), confEnv,
+  );
+  check("确认链接只能用一次", cres.status === 400, cres.status);
 
 
   console.log("\n[31] AI 字段透传与日历真实事件日");
@@ -962,7 +983,7 @@ const check = (name, cond, extra = "") => {
   check("控制台有快捷选择", r.text.includes("只选研电赛") && r.text.includes("全选"));
   check("控制台带 5 分钟暂存窗口", r.text.includes('data-apply-delay="300000"'), r.text.slice(0, 120));
   check("控制台有立即生效入口", r.text.includes('id="applyNow"') && r.text.includes("立即生效"));
-  check("控制台说明改动延迟生效", r.text.includes("分钟后自动生效"));
+  check("控制台说明改动延迟生效", r.text.includes("分钟后生效") && r.text.includes("立即生效"));
   check("赛事勾选可提交", r.text.includes('name="contest" value="电子设计竞赛"'));
 
   r = await call("/api/list", { headers: { Authorization: "Bearer admin-secret" } });

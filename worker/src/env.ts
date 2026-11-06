@@ -34,8 +34,6 @@ export interface Env {
   MAX_PER_IP_HOUR?: string;
   MAX_CONFIRM_PER_DAY?: string;
   LIST_RATE_PER_HOUR?: string;
-  /** 是否要求二次确认订阅；"false" / "0" 关闭（老部署平滑升级用） */
-  DOUBLE_OPT_IN?: string;
   /** @deprecated 旧部署兼容：完整的 "名称 <地址>" */
   MAIL_FROM?: string;
 
@@ -58,7 +56,6 @@ export interface Config {
   maxPerIpHour: number;
   maxConfirmPerDay: number;
   listRatePerHour: number;
-  doubleOptIn: boolean;
   webhookSecret: string;
 }
 
@@ -133,7 +130,6 @@ export function getConfig(env: Env): Config {
     maxPerIpHour: positiveInt(env.MAX_PER_IP_HOUR, 10),
     maxConfirmPerDay: positiveInt(env.MAX_CONFIRM_PER_DAY, 200),
     listRatePerHour: positiveInt(env.LIST_RATE_PER_HOUR, 60),
-    doubleOptIn: !/^(0|false|no)$/i.test((env.DOUBLE_OPT_IN || "true").trim()),
     webhookSecret: (env.RESEND_WEBHOOK_SECRET || "").trim(),
   };
 }

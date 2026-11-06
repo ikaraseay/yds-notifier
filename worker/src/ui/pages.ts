@@ -19,24 +19,23 @@ export function loginPage(site: string, count: number, deleted = false): Respons
     title: site,
     heading: "订阅<em>研电赛</em>通知",
     body: `
-      <p class="sub">研电赛的通知散在竞赛官网、研创网和各个赛事站点。
-        这里替你盯着：有新公告才发一封邮件，没有就不打扰。</p>
+      <p class="sub">研电赛的通知散落在竞赛官网、研创网和各赛事站点。
+        这个站帮你盯着：有新公告就发一封邮件，没有就不打扰。</p>
       <div class="count">已有 ${count} 人订阅</div>
       ${deleted ? `<div class="alert ok" role="status">账号已注销，订阅记录也已删除。</div>` : ""}
       <form id="f">
         <input type="email" id="email" name="email" placeholder="你的邮箱地址"
                autocomplete="email" required maxlength="254">
-        <button type="submit" id="btn">进入控制台</button>
+        <button type="submit" id="btn">发送登录邮件</button>
         <div id="msg" role="status" aria-live="polite"></div>
       </form>`,
     extra: `<div class="tip">
-      不需要密码。填邮箱 → 收信 <strong>点链接验证</strong> →
-      首次订阅再点一次确认，之后才会开始收到通知。<br>
-      链接 15 分钟内有效，且只能用一次。
+      不用设密码：填邮箱后会收到一封登录邮件，<strong>点里面的链接</strong>即可完成订阅并进入控制台。<br>
+      登录链接 15 分钟内有效，只能使用一次。
     </div>
     <div class="tip tip--tight">
       不订阅也能看：<a href="/archive">通知归档</a> · <a href="/feed.xml">RSS</a>。
-      想要日历就登录，控制台里复制你的专属地址（已按角色和赛事过滤）。
+      订阅后还能在控制台复制专属日历地址，内容按你的角色和赛事过滤。
     </div>`,
     script: LOGIN_SCRIPT,
   });
@@ -92,29 +91,28 @@ export function dashboardPage(user: User, calendarUrl = ""): Response {
     title: "控制台",
     heading: "通知<em>设置</em>",
     body: `
-      <p class="sub">先选角色和赛事，再挑栏目。改动先存在本机，${Math.round(PREFS_APPLY_DELAY_MS / 60000)} 分钟后自动生效 —— 连着改几项也只保存一次。</p>
+      <p class="sub">改动会自动保存，最迟 5 分钟后生效。</p>
       <div class="who" id="who">
         <span>${esc(user.email)}</span>
         <a href="#" id="logout">退出登录</a>
       </div>
       ${pending ? `<div class="alert err" id="pending-box" role="status">
-        还差一步：我们给 <b>${esc(user.email)}</b> 发了一封确认邮件，点里面的链接才会开始收通知。
+        还差一步：确认邮件已发到 <b>${esc(user.email)}</b>，点里面的链接后才开始收通知。
+        没收到的话，先看看垃圾箱。
         <button type="button" id="resend" class="btn-secondary btn-gap">重新发送确认邮件</button>
       </div>` : ""}
       <div id="settings" data-email="${esc(user.email)}" data-apply-delay="${PREFS_APPLY_DELAY_MS}">
         <div class="section section--first">
           <h2>我的角色</h2>
           <p class="sub hint">
-            不同角色看到的内容不同：学生关注报名与提交，导师关注评审与决赛，培养单位关注审核与承办。
-            多选取并集。
+            学生看报名与提交，导师看评审与决赛，培养单位看审核与承办。可多选，按所选角色的合集推送。
           </p>
           <div id="aud-opts" class="opts">${audOpts}</div>
         </div>
         <div class="section">
           <h2>关注的赛事</h2>
           <p class="sub hint">
-            只勾你要跟的赛事。<strong>一个都不勾 = 全部赛事都收</strong>。
-            当前：${allContests ? "全部赛事" : `${pickedContests.size} 项`}。
+            只勾你关心的赛事，都不勾时默认接收全部。当前：${allContests ? "全部赛事" : `${pickedContests.size} 项`}。
           </p>
           <div class="row-actions">
             <button type="button" class="btn-mini" data-contest-preset="core">只选研电赛</button>
@@ -126,7 +124,7 @@ export function dashboardPage(user: User, calendarUrl = ""): Response {
         <div class="section">
           <h2>通知栏目</h2>
           <p class="sub hint">
-            栏目决定内容类型，角色决定视角，两者取交集。
+            勾选想收的通知类型，会与上面的角色一起筛选。
           </p>
           <div id="opts" class="opts">${opts}</div>
         </div>
@@ -149,14 +147,14 @@ export function dashboardPage(user: User, calendarUrl = ""): Response {
       </div>
       <div id="msg" role="status" aria-live="polite"></div>
       <div id="applybar" class="applybar" aria-live="polite">
-        <span id="applytext">有改动待保存</span>
+        <span id="applytext">有未保存的更改</span>
         <button type="button" id="applyNow" class="btn-mini">立即生效</button>
       </div>
       <div class="section">
         <h2>我的日历</h2>
         <p class="sub hint">
-          只包含你勾选的角色与赛事。粘贴到手机或 Outlook 的「订阅日历」即可，
-          改设置后自动同步；公共日历已下线，别人拿到你的地址也改不了内容。
+          内容只包含你订阅的赛事和栏目，修改设置后自动同步。
+          把地址粘贴到手机或 Outlook 的「订阅日历」即可。地址与你的邮箱绑定，请勿分享。
         </p>
         ${calendarUrl ? `<input type="text" id="calUrl" class="field" readonly
                value="${esc(calendarUrl)}" aria-label="我的日历地址">
@@ -169,7 +167,7 @@ export function dashboardPage(user: User, calendarUrl = ""): Response {
       </div>
       <div class="danger">
         <h2>注销账户</h2>
-        <p>删除账号、订阅记录、角色与赛事设置，之后不再收到任何邮件。此操作不可恢复。</p>
+        <p>将删除账号、订阅记录和全部设置，之后不再收到任何邮件，且无法恢复。</p>
         <button type="button" id="del" class="btn-danger">注销账户</button>
       </div>`,
     script: PREFS_SCRIPT,

@@ -89,7 +89,7 @@
 - **自动部署**：Workers Builds 连接 GitHub 后，push 到 `main` 即构建部署 Worker；Python 端由 Actions 定时运行。
 - **自定义域名**：`[[routes]] custom_domain = true` 绑定，同时保留 `workers.dev` 备用入口。
 - **内容变更检测**：列表页指纹 + 每日一次详情抽检；官网改标题、补正文、加附件、延长截止都会以「【更新】」重推。
-- **双重确认订阅**：首次登录后再点一封确认邮件才进入名单，随后发欢迎邮件并记录同意时间。
+- **点一次即完成订阅确认**：登录链接只发到本人邮箱，点开即视为邮箱验证与订阅同意（double opt-in），随后发欢迎邮件并记录同意时间。
 - **频率与暂停**：控制台可选即时 / 日报 / 周报，或暂停到指定日期；暂停期间的通知随恢复后的摘要补上。
 - **归档 · RSS**：`/archive`、`/feed.xml` 无需注册即可查看通知；日历改为**个人订阅制**，只对本人签发。
 - **归档日历视图**：月历格子直接标出「节点名 + 来源」，右上角数字是当天节点数；点格子跳到当天日程（锚点高亮），节点标题链回原文；月份可用「上月 / 下月 / 本月」或折叠的 12 个月网格快速切换，翻月保留当前筛选。
@@ -302,7 +302,7 @@ GitHub 侧需要 `gh auth login --web --scopes "repo,workflow"`；也可在两�
 | 位置 | 内容 |
 |---|---|
 | Cloudflare → Secrets | `UNSUB_SECRET` · `SUBSCRIBE_API_TOKEN` · `RESEND_API_KEY`（可选 `UNSUB_SECRET_PREVIOUS`、`RESEND_WEBHOOK_SECRET`） |
-| Cloudflare → Variables | `CUSTOM_DOMAIN` 或 `WORKERS_DEV_URL` · `MAIL_FROM_ADDRESS` · `MAIL_TO`（可选显示名、限流参数、`DOUBLE_OPT_IN`） |
+| Cloudflare → Variables | `CUSTOM_DOMAIN` 或 `WORKERS_DEV_URL` · `MAIL_FROM_ADDRESS` · `MAIL_TO`（可选显示名、限流参数） |
 | Cloudflare → Bindings | `SUBS`（KV） · `RATE`（Durable Object，已配好） |
 | GitHub → Actions Secrets | 与 Cloudflare 同名同值的密钥、域名、发信配置；`AI_API_KEY`（DeepSeek）；可选 `PUBLISH_NOTICES`、`HEARTBEAT_URL`、`ALERT_WEBHOOK_URL` |
 
@@ -375,7 +375,6 @@ sources:
 
 本轮新增的可选配置：`RESEND_WEBHOOK_SECRET`（Resend → Webhooks 的签名密钥，端点填
 `https://<站点>/api/webhooks/resend`，勾选 `email.bounced` / `email.complained` / `suppression.added`）、
-`DOUBLE_OPT_IN`（默认开启，填 `false` 可回到「点登录链接即订阅」）、
 `PUBLISH_NOTICES`（归档同步开关）、`HEARTBEAT_URL`（外部 dead-man switch 的 ping 地址）与
 `ALERT_WEBHOOK_URL`（失败时接收 POST JSON 的告警地址）。空值会被同步脚本跳过。
 
@@ -593,7 +592,7 @@ yds-notifier/
 批量通知按「报名参赛 / 评审与名单 / 决赛与收官 / 赛事动态」分组，HTML + 纯文本双格式，
 按时段变化问候；底部提供退订按钮与 RFC 8058 一键退订头。
 收件人可在控制台勾选栏目、切换即时 / 日报 / 周报或暂停；官网对同一篇文章做「更正 / 补充 / 延期」时，
-邮件主题与卡片会带「【更新】」标记重新推送。首次订阅需经过登录邮件 + 确认邮件两次点击，确认后才发欢迎信。
+邮件主题与卡片会带「【更新】」标记重新推送。首次订阅只需点一次登录邮件里的链接：点开即完成邮箱验证与订阅确认，随后收到欢迎信。
 
 | 项 | 实际情况 |
 |---|---|
