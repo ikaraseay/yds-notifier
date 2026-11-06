@@ -26,13 +26,7 @@ log = logging.getLogger("yds")
 
 CATEGORY_ORDER = ("报名参赛", "评审与名单", "决赛与收官", "赛事动态", "其他通知")
 
-# 人员视角分区的标题与主题色
-AUDIENCE_TITLES = {
-    "student": "参赛学生 · 你需要做什么",
-    "advisor": "指导教师 · 请关注",
-    "admin": "培养单位 · 待办",
-    "organizer": "分赛区 / 承办方 · 关注",
-}
+# 人员视角分区的主题色（标题直接用角色名，不再加「你需要做什么」这类后缀）
 AUDIENCE_COLORS = {
     "student": "#FF6B6B",
     "advisor": "#4D96FF",
@@ -85,7 +79,7 @@ def build_text(notices: Sequence[Notice], site: str = "", unsubscribe_url: str =
         if n.audiences:
             lines.append(f"    面向：{' / '.join(AUDIENCE_NAMES.get(a, a) for a in n.audiences)}")
         if n.action:
-            lines.append(f"    要做什么：{n.action}")
+            lines.append(f"    {n.action}")
         if n.ai_summary or n.summary:
             lines.append(f"    {n.ai_summary or n.summary}")
         for e in n.ai_events[:4]:
@@ -125,15 +119,22 @@ def _safe_url(v: str) -> str:
     return v
 
 
-def _persona_block(notices: Sequence[Notice]) -> str:
-    """邮件顶部「不同角色，各自要做的事」三栏摘要。
+def _persona_block(notices: Sequence[Notice], roles: Sequence[str] = ()) -> str:
+    """邮件顶部按角色分组的摘要，只包含收件人自己订阅的角色。
 
-    同一条通知可能同时面向学生与导师，这里**允许重复出现**：
-    读者只关心自己那一栏，重复比遗漏好。
+    `roles` 为空表示「不限制」（站长邮箱或偏好字段缺失），此时才展示全部角色。
+    同一条通知只归到它命中的第一个角色下，避免三个视角把同一条重复三遍。
     """
+    order = [a for a in AUDIENCES if not roles or a in roles]
+    buckets: dict = {a: [] for a in order}
+    for n in notices:
+        for aud in order:
+            if aud in (n.audiences or []):
+                buckets[aud].append(n)
+                break
     rows = []
-    for aud in AUDIENCES:
-        items = [n for n in notices if aud in (n.audiences or [])]
+    for aud in order:
+        items = buckets[aud]
         if not items:
             continue
         # 有明确动作的排前面，动态类垫底
@@ -155,7 +156,7 @@ def _persona_block(notices: Sequence[Notice]) -> str:
             f'<div style="font-size:13px;font-weight:700;color:{color};">'
             f'<span style="display:inline-block;width:9px;height:9px;border-radius:2px;'
             f'background:{color};margin-right:7px;vertical-align:middle;"></span>'
-            f'{_esc(AUDIENCE_TITLES.get(aud, AUDIENCE_NAMES.get(aud, aud)))}'
+            f'{_esc(AUDIENCE_NAMES.get(aud, aud))}'
             f'<span style="color:#b8bccb;font-weight:400;">&nbsp;{len(items)}</span></div>'
             f'{"".join(lines)}</td></tr>'
         )
@@ -165,9 +166,7 @@ def _persona_block(notices: Sequence[Notice]) -> str:
     <tr><td style="padding:14px 0 0;">
       <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
              style="background:#ffffff;border:3px solid #2E2A33;border-radius:8px;">
-        <tr><td style="padding:16px 18px 18px;">
-          <div style="font-size:12px;color:#8a90a2;letter-spacing:1px;font-weight:700;">
-            不同角色 · 各自要做的事</div>
+        <tr><td style="padding:14px 18px 18px;">
           <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
             {''.join(rows)}
           </table>
@@ -282,7 +281,9 @@ def _contest_sections(
                 f'<a href="{_esc(_safe_url(_with_query(archive_url, q)))}" style="font-size:11px;'
                 f'color:#4D96FF;text-decoration:none;font-weight:700;">赛事列表</a>'
             )
-        cards = "".join(_notice_card(n) for n in ns)
+        cards = "".join(
+            _notice_card(n, only_audiences=(persona,) if persona else ()) for n in ns
+        )
         out.append(
             f"""
     <tr><td style="padding:22px 0 12px;">
@@ -301,7 +302,7 @@ def _contest_sections(
     return "".join(out)
 
 
-def _notice_card(n: Notice, compact: bool = False) -> str:
+def _notice_card(n: Notice, compact: bool = False, only_audiences: Sequence[str] = ()) -> str:
     color, soft = CATEGORY_STYLE.get(n.category, ("#7B9EF8", "#EEF3FF"))
     is_soft = any(k in n.title for k in SOFT_BADGE)
 
@@ -382,8 +383,10 @@ def _notice_card(n: Notice, compact: bool = False) -> str:
     meta_bits = []
     if n.contest:
         meta_bits.append(n.contest)
-    if n.audiences:
-        meta_bits.append("面向：" + " / ".join(AUDIENCE_NAMES.get(a, a) for a in n.audiences))
+    # 只列收件人自己勾选的角色，不把他没收的视角摊在眼前
+    shown_auds = [a for a in n.audiences if not only_audiences or a in only_audiences]
+    if shown_auds:
+        meta_bits.append("面向：" + " / ".join(AUDIENCE_NAMES.get(a, a) for a in shown_auds))
     meta_block = (
         f'<tr><td style="padding:8px 18px 0;font-size:11px;color:#8a90a2;line-height:17px;">'
         f'<span style="display:inline-block;padding:1px 7px;background:#EEF3FF;'
@@ -395,7 +398,7 @@ def _notice_card(n: Notice, compact: bool = False) -> str:
         f'<tr><td style="padding:10px 18px 0;">'
         f'<div style="background:#FFF4E4;border-left:4px solid #FF6B6B;padding:8px 12px;'
         f'font-size:12px;line-height:18px;color:#2b2f3d;">'
-        f'<b>要做什么：</b>{_esc(n.action)}</div></td></tr>'
+        f'{_esc(n.action)}</div></td></tr>'
         if n.action else ""
     )
 
@@ -442,6 +445,7 @@ def build_html(
     persona: str = "",
     calendar_url: str = "",
     archive_url: str = "",
+    audiences: Sequence[str] = (),
 ) -> str:
     groups = {c: [] for c in CATEGORY_ORDER}
     for n in notices:
@@ -461,7 +465,12 @@ def build_html(
             continue
         color, _ = CATEGORY_STYLE[cat]
         cards = "".join(
-            _notice_card(n, compact=compact_low and n.ai_urgency == "low") for n in items
+            _notice_card(
+                n,
+                compact=compact_low and n.ai_urgency == "low",
+                only_audiences=audiences,
+            )
+            for n in items
         )
         blocks.append(
             f"""
@@ -548,7 +557,7 @@ def build_html(
     </table>
   </td></tr>
 
-  {'' if persona else _persona_block(notices)}
+  {'' if persona else _persona_block(notices, audiences)}
 
   {overview}
 

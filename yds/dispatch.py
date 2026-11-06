@@ -53,7 +53,7 @@ def _send_one(
     repo_url: str,
     compact_low: bool = False,
 ) -> None:
-    mine = [n for n in batch if rcpt.wants_notice(n)]
+    mine = [n for n in batch if rcpt.wants_notice(n) and not n.is_expired]
     if not mine:
         return
     unsub_ready = bool(settings.unsub_url and settings.unsub_secret)
@@ -86,6 +86,7 @@ def _send_one(
         persona=persona,
         calendar_url=personal_cal,
         archive_url=f"{base}/archive" if base else "",
+        audiences=sorted(auds),
     )
     text_body = build_text(mine, site=settings.site_name, unsubscribe_url=unsub_for)
     sender.send(
@@ -223,7 +224,7 @@ def dispatch(
     for key, users in digest_users.items():
         if not users or not due[key] or not pending[key]:
             continue
-        pool = pending_notices(pending[key])
+        pool = [n for n in pending_notices(pending[key]) if not n.is_expired]
         if dry_run:
             log.info("[dry-run] 将发送 %s 摘要：%s 条 -> %s 人", key, len(pool), len(users))
             continue

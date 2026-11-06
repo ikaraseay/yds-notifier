@@ -550,6 +550,13 @@ def main(argv: List[str] | None = None) -> int:
         return 0
 
     fresh = sort_notices(list(merged.values()))
+    # 时间节点全部过去的通知不再写进邮件（含本轮新抓到的旧公告）。
+    # 仍要标已读，否则每轮都会被当成「新通知」重复处理。
+    expired = [n for n in fresh if n.is_expired]
+    if expired:
+        log.info("跳过 %s 条已结束的通知（时间节点均已过去）", len(expired))
+        state.mark(expired)
+        fresh = [n for n in fresh if not n.is_expired]
     catchup_dropped = 0
     if first_run and cfg.get("on_first_run", "baseline") == "baseline":
         fresh = fresh[: int(cfg.get("baseline_size", 8))]
@@ -577,6 +584,9 @@ def main(argv: List[str] | None = None) -> int:
         return 0
 
     if not fresh and not reminders:
+        if expired:
+            # 全部过期时也要落盘「已读」，否则下一轮会把它们再当初次发现
+            state.save()
         log.info("没有新通知，本轮不发信")
         return 0
 

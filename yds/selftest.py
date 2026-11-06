@@ -230,6 +230,39 @@ def main() -> int:
     check("HTML 带更新角标", ">更新</span>" in build_html([upd]))
     check("头部文案区分更新", "有更新" in build_html([upd]))
 
+    print("\n[9b] 角色分区只列出订阅者勾选的角色")
+    stu = _notice("报名通知", uid="p1", audiences=["student"])
+    adm = _notice("培养单位审核通知", uid="p2", audiences=["admin"])
+    only_stu = build_html([stu], audiences=["student"])
+    check("只显示勾选的角色", "参赛学生" in only_stu and "指导教师" not in only_stu)
+    check("组标题就是角色名", "你需要做什么" not in only_stu and "请关注" not in only_stu)
+    check("卡片不再写「要做什么：」", "要做什么" not in only_stu)
+    check("纯文本也不再写「要做什么：」", "要做什么" not in build_text([stu]))
+    no_roles = build_html([stu, adm])
+    check("未设置角色时展示全部", "参赛学生" in no_roles and "培养单位" in no_roles)
+    shared = _notice("报名与审核都相关的通知", uid="p4", audiences=["student", "advisor"])
+    card_only = build_html([shared], audiences=["student"])
+    check("卡片「面向」只列勾选角色", "面向：参赛学生" in card_only and "指导教师" not in card_only)
+    both = _notice("报名与审核都相关的通知", uid="p3", audiences=["student", "admin"])
+    dedup = build_html([both], audiences=["student", "admin"])
+    check("同一通知只归到首个角色", dedup.count(both.title) == 2, str(dedup.count(both.title)))
+
+    print("\n[9c] 已结束的通知不再写进邮件")
+    old = _notice("数学建模赛题下载提醒", uid="e1", audiences=["student"])
+    old.ai_events = [{"date": "2026-09-27", "label": "MD5 提交截止"},
+                     {"date": "2026-09-28", "label": "论文上传截止"}]
+    check("时间节点全过去判为已结束", old.is_expired is True)
+    soon = _notice("公示结果", uid="e2", audiences=["student"])
+    soon.ai_events = [{"date": (date.today() + timedelta(days=3)).isoformat(),
+                       "label": "反馈异议截止"}]
+    check("还有未来节点则保留", soon.is_expired is False)
+    dateless = _notice("没有日期的旧通知", uid="e3")
+    dateless.published = date.today() - timedelta(days=60)
+    check("无日期按发布日兜底", dateless.is_expired is True)
+    fresh_note = _notice("没有日期的新通知", uid="e4")
+    fresh_note.published = date.today() - timedelta(days=2)
+    check("近期无日期通知保留", fresh_note.is_expired is False)
+
     print("\n[10] 归档同步不会被「无新公告」提前返回跳过")
     # 回归守卫：同步曾写在 `if not fresh: return 0` 之后，导致没有新公告时
     # 归档/RSS/日历永远为空。这里只做静态顺序校验，不联网、不发信。
