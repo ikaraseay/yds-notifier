@@ -395,7 +395,7 @@ def main() -> int:
     print("\n[16] 赛事 / 阶段 / 人员视角")
     check("研电赛简称归一", infer_contest("第二十一届研电赛报名通知") == "电子设计竞赛")
     check("EDA 优先于创芯", infer_contest("创芯大赛—EDA精英挑战赛") == "EDA精英挑战赛")
-    check("识别不出时默认研电赛", infer_contest("某通知") == "电子设计竞赛")
+    check("识别不出时留空（不硬猜研电赛）", infer_contest("某通知") == "")
     check("报名阶段", infer_stage("关于报名截止时间延长的通知") == "报名")
     check("资格审查阶段", infer_stage("关于做好参赛资格审核工作的通知") == "资格审查")
     check("回顾类判为动态", infer_stage("全国总决赛圆满落幕") == "动态")

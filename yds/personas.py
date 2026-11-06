@@ -150,15 +150,18 @@ def normalize_contest(raw: str) -> str:
 
 
 def infer_contest(title: str, source: str = "", declared: str = "") -> str:
-    """优先用配置/数据源声明的赛事，其次标题，最后来源名。"""
+    """优先用配置/数据源声明的赛事，其次标题，最后来源名。
+
+    识别不出时返回空串，而不是硬塞「电子设计竞赛」——
+    大赛通知栏目同时覆盖 19 项赛事，猜错比留空更糟。
+    """
     got = normalize_contest(declared)
     if got:
         return got
     got = normalize_contest(title)
     if got:
         return got
-    got = normalize_contest(source)
-    return got or DEFAULT_CONTEST
+    return normalize_contest(source)
 
 
 def infer_stage(title: str, category: str = "", body: str = "") -> str:
