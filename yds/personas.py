@@ -14,34 +14,43 @@
 
 from __future__ import annotations
 
+import json
 import re
+from pathlib import Path
 from typing import Dict, List, Sequence
 
 # ---------------------------------------------------------------------------
-# 主题赛事（来源：研创网页脚「主题赛事」菜单，顺序与官方一致）
+# 主题赛事：从 shared/contests.json 读取（跨端单一事实源）
+#
+# 过去 Python 与 Worker 各自硬编码一份赛事清单，靠 selftest 去「解析 auth.ts
+# 的源码文本」比对——两端都可能改漏，测试也只是事后对齐，属于典型的契约漂移。
+# 现在只有一个 JSON，Python 运行时读、Worker 构建期内联，改赛事只改一处。
 # ---------------------------------------------------------------------------
-CONTESTS: Sequence[str] = (
-    "智慧城市技术与创意设计大赛",
-    "未来飞行器创新大赛",
-    "数学建模竞赛",
-    "电子设计竞赛",
-    "创“芯”大赛",
-    "EDA精英挑战赛",
-    "人工智能创新大赛",
-    "机器人创新设计大赛",
-    "能源装备创新设计大赛",
-    "公共管理案例大赛",
-    "乡村振兴科技强农+创新大赛",
-    "网络安全创新大赛",
-    "“双碳”创新与创意大赛",
-    "金融科技创新大赛",
-    "“美丽中国”创新设计大赛",
-    "企业管理创新大赛",
-    "操作系统开源创新大赛",
-    "“文化中国”两创大赛",
-    "国际中文教育案例大赛",
-    "智能建造创新大赛",
-)
+CONTRACTS = Path(__file__).resolve().parent.parent / "shared" / "contests.json"
+
+
+def _load_contests() -> List[dict]:
+    with open(CONTRACTS, encoding="utf-8") as fh:
+        raw = json.load(fh)
+    rows = raw.get("contests")
+    if not isinstance(rows, list) or not rows:
+        raise RuntimeError(f"shared/contests.json 缺少 contests 数组：{CONTRACTS}")
+    return [
+        {"name": str(r.get("name") or "").strip(), "zoneId": str(r.get("zoneId") or "").strip()}
+        for r in rows
+        if isinstance(r, dict) and str(r.get("name") or "").strip()
+    ]
+
+
+_CONTESTS = _load_contests()
+
+# 顺序与官方页脚一致：邮件「按赛事汇总」与后台勾选面板都按这个顺序展示
+CONTESTS: Sequence[str] = tuple(c["name"] for c in _CONTESTS)
+
+# 主题赛事 → 研创网赛事 id（取自页脚「主题赛事」链接的 /cw/hp/<id>）。
+# 数字 id 与 uuid 都能拼进 /cw/contestNews/list/<id>/<page>。
+# 乡村振兴大赛官网暂无独立专区（页脚为 #），zoneId 为空表示跳过。
+CONTEST_IDS: Dict[str, str] = {c["name"]: c["zoneId"] for c in _CONTESTS}
 
 # 标题里的简称 / 别称 → 标准赛事名（长的放前面，避免「创芯」抢先匹配「创芯EDA」）
 CONTEST_ALIASES: Sequence[tuple[str, str]] = (
@@ -70,32 +79,6 @@ CONTEST_ALIASES: Sequence[tuple[str, str]] = (
     ("智能建造", "智能建造创新大赛"),
 )
 DEFAULT_CONTEST = "电子设计竞赛"
-
-# 主题赛事 → 研创网赛事 id（取自页脚「主题赛事」链接的 /cw/hp/<id>）。
-# 数字 id 与 uuid 都能拼进 /cw/contestNews/list/<id>/<page>。
-# 乡村振兴大赛官网暂无独立专区（页脚为 #），留空表示跳过。
-CONTEST_IDS: Dict[str, str] = {
-    "智慧城市技术与创意设计大赛": "1",
-    "未来飞行器创新大赛": "3",
-    "数学建模竞赛": "4",
-    "电子设计竞赛": "6",
-    "创“芯”大赛": "10",
-    "EDA精英挑战赛": "2c9080158ee9c272018f229208b610a6",
-    "人工智能创新大赛": "2c9088a5696cbf370169a3f8101510bd",
-    "机器人创新设计大赛": "2c9088a5696cbf370169a3f8934810be",
-    "能源装备创新设计大赛": "7",
-    "公共管理案例大赛": "8",
-    "乡村振兴科技强农+创新大赛": "",
-    "网络安全创新大赛": "2c90800c8093eef401809d33b36f0652",
-    "“双碳”创新与创意大赛": "2c90800c8093eef401809d348f8b0653",
-    "金融科技创新大赛": "2c90800c8093eef401809d3501080654",
-    "“美丽中国”创新设计大赛": "2c908018876ef068018774a9501a03fe",
-    "企业管理创新大赛": "2c90801786cfa2b60186de4143390279",
-    "操作系统开源创新大赛": "2c9080178c7c917b018d1b1a0af61cd6",
-    "“文化中国”两创大赛": "2c9080178e896671018e97ce7525018b",
-    "国际中文教育案例大赛": "2c9080158e2ad864018e5fa55a450c49",
-    "智能建造创新大赛": "2c90801795a92a850195d03b537b1bac",
-}
 
 # ---------------------------------------------------------------------------
 # 阶段

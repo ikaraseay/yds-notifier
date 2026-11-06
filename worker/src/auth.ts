@@ -15,6 +15,8 @@
  * 也避免 sub: 与 user: 两次写入之间的一致性窗口。
  */
 
+import CONTRACT from "../../shared/contests.json";
+
 export const CATEGORIES = [
   { key: "registration", label: "报名参赛", desc: "报名通知、赛事章程、赛题指南", color: "#FF6B6B" },
   { key: "review", label: "评审与名单", desc: "初赛评审、晋级公示、获奖名单", color: "#4D96FF" },
@@ -38,34 +40,11 @@ export const AUDIENCES = [
 export type AudienceKey = (typeof AUDIENCES)[number]["key"];
 
 /**
- * 主题赛事清单。**必须与 yds/personas.py 的 CONTESTS 完全一致**，
- * yds/selftest.py 会解析本文件并逐项比对，改这里要同时改那边。
- *
- * <contests>
+ * 主题赛事清单：来自 shared/contests.json（跨端单一事实源），构建期由
+ * esbuild 内联进 bundle。Python 端 yds/personas.py 读同一个文件，
+ * 因此不存在「改了这边忘了那边」的契约漂移。
  */
-export const CONTESTS = [
-  "智慧城市技术与创意设计大赛",
-  "未来飞行器创新大赛",
-  "数学建模竞赛",
-  "电子设计竞赛",
-  "创“芯”大赛",
-  "EDA精英挑战赛",
-  "人工智能创新大赛",
-  "机器人创新设计大赛",
-  "能源装备创新设计大赛",
-  "公共管理案例大赛",
-  "乡村振兴科技强农+创新大赛",
-  "网络安全创新大赛",
-  "“双碳”创新与创意大赛",
-  "金融科技创新大赛",
-  "“美丽中国”创新设计大赛",
-  "企业管理创新大赛",
-  "操作系统开源创新大赛",
-  "“文化中国”两创大赛",
-  "国际中文教育案例大赛",
-  "智能建造创新大赛",
-];
-// </contests>
+export const CONTESTS: string[] = CONTRACT.contests.map((c) => c.name);
 
 export const DEFAULT_CONTEST = "电子设计竞赛";
 

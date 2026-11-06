@@ -30,6 +30,9 @@ worker/.dev.vars
 *.tmp
 preview.html
 .DS_Store
+# 单实例运行锁：进程退出自动释放，不入库
+data/.run.lock
+data/*.tmp
 
 # 保留去重状态文件（Actions 需要提交它）
 !data/seen.json
