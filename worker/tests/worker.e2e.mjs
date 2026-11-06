@@ -14,8 +14,10 @@ class MockKV {
   constructor() {
     this.map = new Map();
     this.writes = 0;
+    this.reads = 0;
   }
   async get(k) {
+    this.reads++;
     return this.map.has(k) ? this.map.get(k) : null;
   }
   async put(k, v) {
@@ -1006,6 +1008,42 @@ const check = (name, cond, extra = "") => {
   r = await call("/dashboard", { headers: { Cookie: `yds_sid=${freshSid}` } });
   check("控制台含「我的日历」", r.text.includes("我的日历"));
   check("控制台日历地址带签名", r.text.includes("calendar.ics?email=") && r.text.includes("token="));
+
+  console.log("\n[35] KV 读取次数：同一份数据只读一次");
+
+  // 先写一次触发缓存失效，保证从冷态开始计数
+  await call("/api/notices", {
+    method: "POST", body: JSON.stringify(personaPayload),
+    headers: { Authorization: "Bearer admin-secret" },
+  });
+
+  env.SUBS.reads = 0;
+  r = await call("/calendar.ics");
+  const firstReads = env.SUBS.reads;
+  check("首次日历只读 1 次 KV（通知与赛程合并读取）", firstReads === 1, String(firstReads));
+
+  env.SUBS.reads = 0;
+  await call("/calendar.ics");
+  check("60 秒内再次拉日历 0 次 KV 读", env.SUBS.reads === 0, String(env.SUBS.reads));
+
+  env.SUBS.reads = 0;
+  await call("/archive");
+  check("归档页共用同一份缓存", env.SUBS.reads === 0, String(env.SUBS.reads));
+
+  env.SUBS.reads = 0;
+  await call(calUrl(pEmail));
+  const personalReads = env.SUBS.reads;
+  check("个人日历额外只读 1 次（偏好）", personalReads === 1, String(personalReads));
+
+  // 写入必须让缓存失效，否则归档 / 日历会长期显示旧数据
+  env.SUBS.reads = 0;
+  await call("/api/notices", {
+    method: "POST", body: JSON.stringify(personaPayload),
+    headers: { Authorization: "Bearer admin-secret" },
+  });
+  r = await call("/archive");
+  check("写入后缓存已失效", env.SUBS.reads >= 1, String(env.SUBS.reads));
+  check("写入后归档内容正确", r.text.includes("关于报名截止的通知"));
 
   console.log(`\n结果：${pass} 项通过${process.exitCode ? "，存在失败" : "，全部通过"}`);
 })();
