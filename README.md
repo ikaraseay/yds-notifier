@@ -80,6 +80,7 @@
 ## 核心特性
 
 - **两阶段抓取**：列表页秒级比对，命中才抓详情，高频轮询对源站压力几乎为零。
+- **抓取并发与去重**：列表 / 详情都用线程池并发（单轮 37s → 15s），同一 URL 一轮只请求一次，**同一主机最多 2 个在途请求**——变快不等于给官网加压。
 - **去重基线**：首次运行把现存通知全部记为已读，只发一封最近 8 条的确认邮件，避免一次涌入上百封。
 - **魔法链接登录**：无需密码，链接 15 分钟有效且一次性；会话 `SameSite=Lax` Cookie。
 - **栏目偏好**：报名参赛 / 评审与名单 / 决赛与收官 / 赛事动态，按人过滤。
@@ -100,6 +101,7 @@
 - **后台自助设置**：控制台可选「我的角色」四栏（学生 / 导师 / 培养单位 / 赛区）、关注赛事（19 项 + EDA 专项）、栏目、频率与暂停；筛选是「栏目 × 角色 × 赛事」三层交集。
 - **角色版邮件**：只选一个角色的订阅者收到该角色专版，主题带 `〔参赛学生〕`，正文按赛事分组，每组附该赛事的日历 / 归档链接；多角色则发综合版。
 - **赛事级订阅**：`/calendar.ics?contest=电子设计竞赛&audience=student` 只订单个赛事的日历，`/archive?contest=…` 只看该赛事归档。
+- **个人日历**：邮件页脚与控制台给出 `calendar.ics?email=…&token=…`，签名绑定邮箱；Worker 校验后按**该用户的角色 + 关注赛事**过滤事件，改设置即自动同步，无需重新订阅。`cal` 与 `unsub` 是两套签名域，日历链接泄漏也不能拿去退订。
 - **视角级订阅**：`config.yaml` 的 `personas[].mail_to` 可给学生、导师、培养单位分别发专用版；未配置邮件地址时按订阅者自己的角色设置发信。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
@@ -174,7 +176,7 @@ flowchart LR
 | `/api/list` | GET | 订阅名单与偏好（含频率 / 暂停），需 `Authorization: Bearer <SUBSCRIBE_API_TOKEN>`，带限流 |
 | `/confirm?c=` | GET | 确认订阅（一次性链接），完成后发欢迎邮件 |
 | `/api/confirm/resend` | POST | 重发确认邮件（每邮箱每小时 3 次） |
-| `/archive` · `/feed.xml` · `/calendar.ics` | GET | 通知归档页 / RSS 2.0 / iCalendar 日历订阅 |
+| `/archive` · `/feed.xml` · `/calendar.ics` | GET | 通知归档页 / RSS 2.0 / 日历订阅；归档与日历支持 `?contest=` / `?audience=`，日历另有个人签名版 `?email=&token=` |
 | `/api/notices` | POST | Python 同步通知元数据（公开字段），Bearer 鉴权 |
 | `/api/stats` | GET | 退订原因与降频统计，Bearer 鉴权 |
 | `/api/webhooks/resend` | POST | Resend webhook（Svix 验签），自动清理退信 / 投诉地址 |

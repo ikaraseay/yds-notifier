@@ -39,7 +39,7 @@ const FREQ_LABEL: Record<Frequency, string> = {
   weekly: "每周一封摘要",
 };
 
-export function dashboardPage(user: User): Response {
+export function dashboardPage(user: User, calendarUrl = ""): Response {
   const opts = CATEGORIES.map((c) => {
     const on = user.prefs[c.key];
     return `<label class="opt${on ? " is-on" : ""}">
@@ -139,9 +139,19 @@ export function dashboardPage(user: User): Response {
         <button type="button" id="clearPause" class="btn-secondary" style="margin-top:10px">清除暂停</button>
       </div>
       <div id="msg" role="status" aria-live="polite"></div>
+      <div class="section">
+        <h2>我的日历</h2>
+        <p class="sub" style="font-size:12px;margin:0 0 10px">
+          这个地址只包含你勾选的角色与赛事，粘到手机 / Outlook 的「订阅日历」里即可，
+          改设置后自动同步。
+        </p>
+        <input type="text" id="calUrl" class="field" readonly
+               value="${esc(calendarUrl || "/calendar.ics")}" aria-label="我的日历地址">
+        <button type="button" id="copyCal" class="btn-secondary" style="margin-top:10px">复制日历地址</button>
+      </div>
       <div class="tip" style="margin-top:16px">
         <a href="/archive">通知归档</a> · <a href="/feed.xml">RSS 订阅</a> ·
-        <a href="/calendar.ics">加入日历</a>
+        <a href="${esc(calendarUrl || "/calendar.ics")}">加入日历</a>
       </div>
       <div class="danger">
         <h2>注销账户</h2>

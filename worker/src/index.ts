@@ -22,6 +22,7 @@ import {
   handleCalendar,
   handleFeed,
   handleNoticesPost,
+  personalCalendarUrl,
 } from "./handlers/feed";
 import {
   handleConfirm,
@@ -86,7 +87,7 @@ export default {
         const email = await getSession(env.SUBS, readSessionToken(req));
         if (email) {
           const user = await getUser(env.SUBS, email);
-          if (user) return dashboardPage(user);
+          if (user) return dashboardPage(user, await personalCalendarUrl(env, user.email));
         }
         return loginPage(cfg.siteName, await getCount(env), url.searchParams.get("deleted") === "1");
       }
@@ -117,7 +118,7 @@ export default {
         if (!email) return redirect("/");
         const user = await getUser(env.SUBS, email);
         if (!user) return redirect("/", clearSessionCookie());
-        return dashboardPage(user);
+        return dashboardPage(user, await personalCalendarUrl(env, user.email));
       }
 
       if (p === "/api/prefs") {

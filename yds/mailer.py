@@ -189,10 +189,20 @@ def _contest_groups(notices: Sequence[Notice]) -> List[tuple[str, List[Notice]]]
 
 
 def _contest_query(name: str, persona: str = "") -> str:
-    q = f"?contest={quote(name)}"
+    """拼赛事筛选参数。`base` 可能已带个人日历的 email/token，故要判断分隔符。"""
+    q = f"&contest={quote(name)}"
     if persona:
         q += f"&audience={quote(persona)}"
     return q
+
+
+def _with_query(base: str, query: str) -> str:
+    if not base:
+        return ""
+    if not query:
+        return base
+    sep = "&" if "?" in base else "?"
+    return base + sep + query.lstrip("&")
 
 
 def _next_event(ns: Sequence[Notice]) -> str:
@@ -216,12 +226,12 @@ def _contest_overview(
         links = []
         if calendar_url:
             links.append(
-                f'<a href="{_esc(_safe_url(calendar_url + q))}" style="color:#4D96FF;'
+                f'<a href="{_esc(_safe_url(_with_query(calendar_url, q)))}" style="color:#4D96FF;'
                 f'text-decoration:none;font-weight:700;">日历</a>'
             )
         if archive_url:
             links.append(
-                f'<a href="{_esc(_safe_url(archive_url + q))}" style="color:#4D96FF;'
+                f'<a href="{_esc(_safe_url(_with_query(archive_url, q)))}" style="color:#4D96FF;'
                 f'text-decoration:none;font-weight:700;">列表</a>'
             )
         next_html = (
@@ -264,12 +274,12 @@ def _contest_sections(
         links = []
         if calendar_url:
             links.append(
-                f'<a href="{_esc(_safe_url(calendar_url + q))}" style="font-size:11px;'
+                f'<a href="{_esc(_safe_url(_with_query(calendar_url, q)))}" style="font-size:11px;'
                 f'color:#4D96FF;text-decoration:none;font-weight:700;">赛事日历</a>'
             )
         if archive_url:
             links.append(
-                f'<a href="{_esc(_safe_url(archive_url + q))}" style="font-size:11px;'
+                f'<a href="{_esc(_safe_url(_with_query(archive_url, q)))}" style="font-size:11px;'
                 f'color:#4D96FF;text-decoration:none;font-weight:700;">赛事列表</a>'
             )
         cards = "".join(_notice_card(n) for n in ns)
@@ -497,6 +507,11 @@ def build_html(
     </td></tr>"""
 
     footer_links = []
+    if calendar_url:
+        # 个人日历：已按收件人的角色与赛事偏好过滤过，加一次长期有效
+        footer_links.append(
+            f'<a href="{_esc(_safe_url(calendar_url))}" style="color:#8a90a2;text-decoration:none;">我的日历</a>'
+        )
     if repo_url:
         footer_links.append(f'<a href="{_esc(_safe_url(repo_url))}" style="color:#8a90a2;text-decoration:none;">项目主页</a>')
     if issue_url:
