@@ -125,6 +125,11 @@ a{color:var(--memphis-blue);font-weight:700;text-underline-offset:3px}
   border-radius:5px;box-shadow:3px 3px 0 var(--memphis-ink)}
 .btn-mini:hover{background:#FFFDF7}
 .btn-mini:active{transform:translate(3px,3px);box-shadow:0 0 0 var(--memphis-ink)}
+.applybar{display:none;align-items:center;gap:10px;margin:14px 0 0;padding:9px 12px;
+  font-size:12px;line-height:18px;color:var(--memphis-ink);background:#FFF9E6;
+  border:2px dashed var(--memphis-ink);border-radius:6px}
+.applybar.on{display:flex}
+.applybar span{flex:1}
 .contest-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .opt.compact{padding-bottom:12px}
 .opt.mini{padding:9px 10px 9px 38px;border-width:2px}
