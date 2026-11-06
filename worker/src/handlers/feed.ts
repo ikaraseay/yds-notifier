@@ -8,6 +8,7 @@
 import { getUser, type Prefs } from '../auth';
 import { getConfig, type Env } from '../env';
 import { esc, safeEqual, securityHeaders, signEmailToken, verifyEmailToken } from '../security';
+import { archivePage } from '../ui/archive';
 import { jsonResp, page } from '../ui/layout';
 
 interface Attachment {
@@ -225,6 +226,7 @@ function normalizeSchedule(raw: unknown): ContestSchedule[] {
 interface FeedData {
   notices: Notice[];
   schedule: ContestSchedule[];
+  generatedAt: string;
 }
 
 const FEED_TTL_MS = 60_000;
@@ -242,7 +244,7 @@ async function loadFeed(env: Env): Promise<FeedData> {
     // cacheTtl：让 Cloudflare 边缘缓存这次读取，60 秒内同节点不再回源 KV。
     const raw = await env.SUBS.get('feed:notices', { cacheTtl: 60 });
     if (!raw) {
-      feedCache = { at: now, data: { notices: [], schedule: [] } };
+      feedCache = { at: now, data: { notices: [], schedule: [], generatedAt: '' } };
       return feedCache.data;
     }
     const data = (JSON.parse(raw) || {}) as FeedPayload;
@@ -253,11 +255,12 @@ async function loadFeed(env: Env): Promise<FeedData> {
           .filter((n): n is Notice => n !== null)
       : [];
     const schedule = normalizeSchedule(data.schedule);
-    feedCache = { at: now, data: { notices, schedule } };
+    const generatedAt = asStr(data.generatedAt).trim();
+    feedCache = { at: now, data: { notices, schedule, generatedAt } };
     return feedCache.data;
   } catch {
     // 解析失败时宁可返回上一次的好数据，也不要让所有订阅者的日历一起变空
-    return feedCache?.data ?? { notices: [], schedule: [] };
+    return feedCache?.data ?? { notices: [], schedule: [], generatedAt: '' };
   }
 }
 
@@ -356,50 +359,311 @@ export async function handleNoticesPost(req: Request, env: Env): Promise<Respons
 
 /* ---------------------------- 2. 归档页 ---------------------------- */
 
-function archiveItem(n: Notice): string {
-  const meta = [n.date, n.stage, n.category, n.source].filter(Boolean).map(esc).join(' · ');
-  const updated = n.changeKind === 'changed' ? ' <span class="count">更新</span>' : '';
-  const important = n.aiUrgency === 'critical' ? ' <span class="count">重要</span>' : '';
+/** 归档页卡片：日期 / 阶段 / 来源 / 赛事 → 标题 → 摘要 → 日程 → 要做什么 → 面向。 */
+function archiveCard(n: Notice): string {
   const href = safeUrl(n.url);
   const title = esc(n.title);
   const link = href
     ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${title}</a>`
     : title;
-  const audience = (n.audiences || []).length
-    ? `<p class="sub">面向：${(n.audiences || []).map((a) => AUDIENCE_LABELS[a] || a).map(esc).join(' / ')}</p>`
+
+  const meta: string[] = [`<span>${esc(n.date)}</span>`];
+  if (n.stage && n.stage !== '其他') meta.push(`<span class="stg">${esc(n.stage)}</span>`);
+  if (n.source) meta.push(`<span>${esc(n.source)}</span>`);
+  if (n.contest) meta.push(`<span class="ctg">${esc(n.contest)}</span>`);
+
+  const summary = n.aiSummary || n.summary
+    ? `<div class="ns">${esc(n.aiSummary || n.summary)}</div>`
     : '';
-  const action = n.action ? `<p class="sub">要做什么：${esc(n.action)}</p>` : '';
-  const events = (n.aiEvents || [])
-    .map((e) => {
-      const label = e.label || (e.kind === 'deadline' ? '截止' : '日程');
-      const where = e.location ? ` · ${esc(e.location)}` : '';
-      return `<p class="sub">${esc(label)}：${esc(e.date)}${where}</p>`;
-    })
-    .join('');
-  // 有结构化事件时不再重复显示旧的单值 deadline
-  const deadline = !events && n.deadline ? `<p class="sub">截止 / 日程：${esc(n.deadline)}</p>` : '';
-  const aiSummary = n.aiSummary ? `<p class="sub">摘要：${esc(n.aiSummary)}</p>` : '';
-  return `<div class="detail">
-    <p class="sub">${meta}${updated}${important}</p>
-    <p>${link}</p>
-    ${aiSummary}
-    ${audience}
-    ${action}
-    ${events}
-    ${deadline}
-  </div>`;
+
+  const evs = n.aiEvents || [];
+  const eventHtml = evs.length
+    ? `<div class="er">${evs
+        .map((e) => {
+          const label = e.label || (e.kind === 'deadline' ? '截止' : '日程');
+          const cls = e.kind === 'deadline' ? 'dt dl' : 'dt';
+          const where = e.location ? `（${esc(e.location)}）` : '';
+          return `<div class="ei"><span class="lb">${esc(label)}：</span><span class="${cls}">${esc(e.date)}${where}</span></div>`;
+        })
+        .join('')}</div>`
+    : n.deadline
+      ? `<div class="er"><div class="ei"><span class="lb">截止 / 日程：</span><span class="dt dl">${esc(n.deadline)}</span></div></div>`
+      : '';
+
+  const action = n.action
+    ? `<div class="ar"><span class="lb">要做什么：</span>${esc(n.action)}</div>`
+    : '';
+
+  const auds = n.audiences || [];
+  const audience = auds.length
+    ? `<div class="arow"><span class="arlb">面向：</span>${auds
+        .map((a) => `<span class="at">${esc(AUDIENCE_LABELS[a] || a)}</span>`)
+        .join('')}</div>`
+    : '';
+
+  const badges: string[] = [];
+  if (n.changeKind === 'changed') badges.push('<span class="badge upd">更新</span>');
+  if (n.aiUrgency === 'critical') badges.push('<span class="badge crit">重要</span>');
+  const badgeHtml = badges.length ? `<div class="badges">${badges.join('')}</div>` : '';
+
+  return `<div class="nc">
+  <div class="mr">${meta.join('')}</div>
+  <div class="nt">${link}</div>
+  ${summary}
+  ${eventHtml}
+  ${action}
+  ${audience}
+  ${badgeHtml}
+</div>`;
 }
 
-/** 按 URL 查询参数过滤：?contest=赛事名&audience=角色。 */
-function filterByUrl<T extends { contest?: string; audiences?: string[] }>(items: T[], url: URL): T[] {
-  const contest = (url.searchParams.get('contest') || '').trim();
-  const audience = (url.searchParams.get('audience') || '').trim();
-  if (!contest && !audience) return items;
-  return items.filter((n) => {
-    if (contest && n.contest !== contest) return false;
-    if (audience && !(n.audiences || []).includes(audience)) return false;
-    return true;
-  });
+/** 在保留其它筛选条件的前提下改一个参数（空值表示去掉该条件）。 */
+function archiveHref(url: URL, patch: Record<string, string>): string {
+  const p = new URLSearchParams(url.searchParams.toString());
+  for (const [k, v] of Object.entries(patch)) {
+    if (!v) p.delete(k);
+    else p.set(k, v);
+  }
+  const qs = p.toString();
+  return qs ? `/archive?${qs}` : '/archive';
+}
+
+function chip(label: string, href: string, active: boolean): string {
+  return `<a class="fb${active ? ' act' : ''}" href="${esc(href)}">${esc(label)}</a>`;
+}
+
+function toggle(label: string, href: string, on: boolean): string {
+  return `<a class="tw" href="${esc(href)}"><span>${label}</span><span class="tb${on ? ' on' : ''}"></span></a>`;
+}
+
+interface CalEvent {
+  date: string;
+  label: string;
+  deadline: boolean;
+  title: string;
+  url: string;
+}
+
+/** 把通知里的事件与官方赛程摊平成日历事件。 */
+function calendarEvents(notices: Notice[], schedule: ContestSchedule[]): CalEvent[] {
+  const out: CalEvent[] = [];
+  for (const n of notices) {
+    const events = (n.aiEvents || []).length
+      ? n.aiEvents!.map((e) => ({
+          date: e.date,
+          label: e.label || (e.kind === 'deadline' ? '截止' : '日程'),
+          deadline: e.kind === 'deadline',
+        }))
+      : n.deadline || n.date
+        ? [{ date: n.deadline || n.date, label: '截止 / 日程', deadline: Boolean(n.deadline) }]
+        : [];
+    for (const e of events) {
+      if (!validDate(e.date)) continue;
+      out.push({ date: e.date, label: e.label, deadline: e.deadline, title: n.title, url: safeUrl(n.url) });
+    }
+  }
+  for (const s of schedule) {
+    for (const item of scheduleEntries(s)) {
+      if (!validDate(item.date)) continue;
+      out.push({
+        date: item.date,
+        label: `${s.contest} · ${item.label}`,
+        deadline: item.deadline,
+        title: `${s.contest} ${item.label}`,
+        url: safeUrl(s.sourceUrl),
+      });
+    }
+  }
+  return out;
+}
+
+function renderCalendar(events: CalEvent[], month: string, url: URL): string {
+  const now = new Date();
+  const m = /^(\d{4})-(\d{2})$/.exec(month);
+  const year = m ? Number(m[1]) : now.getUTCFullYear();
+  const mon = m ? Math.min(12, Math.max(1, Number(m[2]))) : now.getUTCMonth() + 1;
+  const first = new Date(Date.UTC(year, mon - 1, 1));
+  const startPad = first.getUTCDay();
+  const days = new Date(Date.UTC(year, mon, 0)).getUTCDate();
+
+  const byDay = new Map<string, CalEvent[]>();
+  for (const e of events) {
+    if (!e.date.startsWith(`${year}-${String(mon).padStart(2, '0')}`)) continue;
+    const arr = byDay.get(e.date) || [];
+    arr.push(e);
+    byDay.set(e.date, arr);
+  }
+
+  const cells: string[] = ['<div class="cdh">日</div>', '<div class="cdh">一</div>', '<div class="cdh">二</div>',
+    '<div class="cdh">三</div>', '<div class="cdh">四</div>', '<div class="cdh">五</div>', '<div class="cdh">六</div>'];
+  for (let i = 0; i < startPad; i++) cells.push('<div class="cd om"></div>');
+  for (let d = 1; d <= days; d++) {
+    const key = `${year}-${String(mon).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
+    const list = byDay.get(key) || [];
+    const dots = list
+      .slice(0, 4)
+      .map((e) => `<span class="ed ${e.deadline ? 'dl' : 'ev'}"></span>`)
+      .join('');
+    cells.push(`<div class="cd${list.length ? ' he' : ''}"><div class="dn">${d}</div>${dots}</div>`);
+  }
+  while (cells.length % 7 !== 0) cells.push('<div class="cd om"></div>');
+
+  const prev = mon === 1 ? `${year - 1}-12` : `${year}-${String(mon - 1).padStart(2, '0')}`;
+  const next = mon === 12 ? `${year + 1}-01` : `${year}-${String(mon + 1).padStart(2, '0')}`;
+
+  const monthEvents = events
+    .filter((e) => e.date.startsWith(`${year}-${String(mon).padStart(2, '0')}`))
+    .sort((a, b) => a.date.localeCompare(b.date));
+  const listHtml = monthEvents.length
+    ? monthEvents
+        .slice(0, 60)
+        .map((e) => {
+          const t = e.url
+            ? `<a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">${esc(e.title)}</a>`
+            : esc(e.title);
+          return `<div class="cei"><span class="edate">${esc(e.date)}</span> · ${esc(e.label)} · ${t}</div>`;
+        })
+        .join('')
+    : '<p class="calem">这个月没有日程节点，看看别的月份吧。</p>';
+
+  return `<div class="calv">
+  <div class="calh"><h3>${year} 年 ${mon} 月</h3>
+    <div class="caln">
+      <a href="${esc(archiveHref(url, { view: 'cal', m: prev }))}">上月</a>
+      <a href="${esc(archiveHref(url, { view: 'cal', m: next }))}">下月</a>
+    </div>
+  </div>
+  <div class="cg">${cells.join('')}</div>
+  <div class="cleg">
+    <span><span class="d dl"></span> 截止日期</span>
+    <span><span class="d ev"></span> 赛事活动</span>
+  </div>
+  <div class="calev">
+    <h4>本月日程（${monthEvents.length}）</h4>
+    ${listHtml}
+  </div>
+</div>`;
+}
+
+export async function handleArchive(req: Request, env: Env): Promise<Response> {
+  const url = new URL(req.url);
+  try {
+    const feed = await loadFeed(env);
+    const all = sorted(feed.notices);
+    const contest = (url.searchParams.get('contest') || '').trim();
+    const category = (url.searchParams.get('category') || '').trim();
+    const audience = (url.searchParams.get('audience') || '').trim();
+    const onlyImportant = url.searchParams.get('important') === '1';
+    const view = url.searchParams.get('view') === 'cal' ? 'cal' : 'list';
+
+    const filtered = all.filter((n) => {
+      if (contest && n.contest !== contest) return false;
+      if (category && n.category !== category) return false;
+      if (audience && !(n.audiences || []).includes(audience)) return false;
+      if (onlyImportant && n.aiUrgency !== 'critical' && n.aiUrgency !== 'high') return false;
+      return true;
+    });
+
+    const contests = [...new Set(all.map((n) => n.contest).filter((c): c is string => Boolean(c)))];
+    const categories = [...new Set(all.map((n) => n.category).filter((c): c is string => Boolean(c)))];
+    const hasFilter = Boolean(contest || category || audience || onlyImportant);
+
+    const generated = feed.generatedAt ? new Date(feed.generatedAt) : new Date();
+    const stamp = Number.isNaN(generated.getTime())
+      ? ''
+      : `${generated.toISOString().slice(0, 10)} ${generated.toISOString().slice(11, 16)}`;
+
+    const stats = `共 <strong>${all.length}</strong> 条通知 · <strong>${contests.length}</strong> 项赛事`
+      + (hasFilter ? ` · 筛选出 <strong>${filtered.length}</strong> 条` : '')
+      + (stamp ? ` · 最近更新 <strong>${stamp}</strong>` : '');
+
+    const contestChips = [
+      chip('全部赛事', archiveHref(url, { contest: '' }), !contest),
+      ...contests.map((c) => chip(c, archiveHref(url, { contest: c }), c === contest)),
+    ].join('');
+
+    const catChips = [
+      chip('全部分类', archiveHref(url, { category: '' }), !category),
+      ...categories.map((c) => chip(c, archiveHref(url, { category: c }), c === category)),
+    ].join('');
+
+    const toggles = [
+      toggle('只看重要', archiveHref(url, { important: onlyImportant ? '' : '1' }), onlyImportant),
+      toggle('参赛者视角', archiveHref(url, { audience: audience === 'student' ? '' : 'student' }),
+        audience === 'student'),
+    ].join('');
+
+    const tabs = `<div class="vtabs">
+      <a class="vt${view === 'list' ? ' act' : ''}" href="${esc(archiveHref(url, { view: '' }))}">通知列表</a>
+      <a class="vt${view === 'cal' ? ' act' : ''}" href="${esc(archiveHref(url, { view: 'cal' }))}">日历视图</a>
+    </div>`;
+
+    const bodyList = filtered.length
+      ? `<div class="nl">${filtered.map(archiveCard).join('')}</div>`
+      : `<div class="empty">${
+          hasFilter ? '没有符合筛选条件的通知。' : '暂时还没有收录通知，过段时间再来看看吧。'
+        }</div>`;
+
+    const main = view === 'cal'
+      ? renderCalendar(calendarEvents(filtered, feed.schedule), url.searchParams.get('m') || '', url)
+      : bodyList;
+
+    const pageBody = `<div class="container">
+  <header class="header">
+    <div class="dot"></div>
+    <h1>研电赛<span class="hl">通知</span></h1>
+    <p class="sub">中国研究生创新实践系列大赛 · 官方通知一站式速览</p>
+    <div class="nav">
+      <a href="/">控制台 / 个人日历</a><a href="/feed.xml">RSS 订阅</a>${
+        hasFilter ? '<a href="/archive">清除筛选</a>' : ''
+      }
+    </div>
+  </header>
+
+  <div class="stats">${stats}</div>
+
+  ${tabs}
+
+  <div class="fsec">
+    <div class="fl">赛事筛选</div>
+    <div class="cscr"><div class="fr">${contestChips}</div></div>
+    <div class="fl fgap">通知分类</div>
+    <div class="fr">${catChips}</div>
+    <div class="fr fgap">${toggles}</div>
+  </div>
+
+  ${main}
+
+  <div class="ebar">
+    <a class="ebtn" href="/">个人日历（登录后复制）</a>
+    <a class="ebtn" href="/feed.xml">订阅 RSS</a>
+    <a class="ebtn" href="/archive">刷新列表</a>
+  </div>
+
+  <div class="srcbar">
+    <div>数据来自 <a href="https://cpipc.acge.org.cn" target="_blank" rel="noopener noreferrer">研创网</a>
+      <span class="sep">·</span>
+      <a href="https://www.cie.org.cn" target="_blank" rel="noopener noreferrer">中国电子学会</a>
+      <span class="sep">·</span> 共 ${all.length} 条，覆盖 ${contests.length} 项主题赛事
+    </div>
+    <div>日历按订阅者角色与关注赛事单独签发，未登录不提供公共日历。</div>
+  </div>
+
+  <footer class="footer">
+    数据来自研创网与中国电子学会官网，请以官方原文为准
+  </footer>
+</div>`;
+
+    return archivePage({ title: '通知归档 · 研电赛', body: pageBody });
+  } catch {
+    return archivePage(
+      {
+        title: '通知归档 · 研电赛',
+        body: '<div class="container"><div class="empty">归档暂时无法加载，请稍后再试。</div></div>',
+      },
+      500,
+    );
+  }
 }
 
 /** 个人日历 token 的有效期：加一次长期使用，给足 10 年。 */
@@ -456,33 +720,6 @@ export async function personalCalendarUrl(env: Env, email: string): Promise<stri
   // 没有签名密钥就不生成链接：宁可让用户看不到入口，也不发一个无效地址
   if (!token) return "";
   return `${base}/calendar.ics?email=${encodeURIComponent(email.toLowerCase())}&token=${token}`;
-}
-
-export async function handleArchive(req: Request, env: Env): Promise<Response> {
-  const url = new URL(req.url);
-  try {
-    const notices = filterByUrl(sorted(await loadNotices(env)), url).slice(0, 200);
-    const contest = (url.searchParams.get('contest') || '').trim();
-    const audience = (url.searchParams.get('audience') || '').trim();
-    const scope = [contest, audience && (AUDIENCE_LABELS[audience] || audience)]
-      .filter(Boolean)
-      .map(esc)
-      .join(' · ');
-    const nav = `<p class="sub">这里收录最近推送过的通知，错过邮件也能查到${
-      scope ? `（当前筛选：${scope}）` : ''
-    }</p>
-<p class="tip">
-  <a href="/feed.xml">RSS 订阅（/feed.xml）</a> ·
-  <a href="/">控制台领取个人日历</a> ·
-  ${scope ? '<a href="/archive">查看全部</a> · ' : ''}<a href="/">返回首页</a>
-</p>`;
-    const list = notices.length
-      ? notices.map(archiveItem).join('')
-      : '<p class="sub">没有符合筛选条件的通知。</p>';
-    return page({ title: '通知归档', heading: '通知归档', body: `${nav}${list}` });
-  } catch {
-    return page({ title: '通知归档', heading: '通知归档', body: '<p class="sub">归档暂时无法加载，请稍后再试。</p>' }, 500);
-  }
 }
 
 /* ---------------------------- 3. RSS ---------------------------- */
@@ -594,6 +831,18 @@ function scheduleEntries(s: ContestSchedule): Array<{ date: string; label: strin
     { date: s.finalStart, label: '决赛开始', deadline: false },
     { date: s.finalEnd, label: '决赛结束', deadline: false },
   ];
+}
+
+/** 按 URL 查询参数过滤：?contest=赛事名&audience=角色（日历接口用）。 */
+function filterByUrl<T extends { contest?: string; audiences?: string[] }>(items: T[], url: URL): T[] {
+  const contest = (url.searchParams.get('contest') || '').trim();
+  const audience = (url.searchParams.get('audience') || '').trim();
+  if (!contest && !audience) return items;
+  return items.filter((n) => {
+    if (contest && n.contest !== contest) return false;
+    if (audience && !(n.audiences || []).includes(audience)) return false;
+    return true;
+  });
 }
 
 export async function handleCalendar(req: Request, env: Env): Promise<Response> {
