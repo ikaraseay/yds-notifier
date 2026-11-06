@@ -364,9 +364,9 @@ a { color: inherit; }
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* 节点名与来源：名称在前（更重要），来源小字跟在后面，放不下时自然截断 */
+/* 来源在前保证始终可见（问的就是「这条是哪来的」），节点名在后，放不下时截断 */
 .cd .cl b { font-weight: 700; color: var(--ink); }
-.cd .cl em { font-style: normal; font-size: 8px; color: #a8a29a; margin-left: 3px; }
+.cd .cl em { font-style: normal; font-size: 8px; color: #a8a29a; margin-right: 3px; }
 .cd .cl.dl { color: var(--coral); }
 .cd .cl.dl b { color: var(--coral); }
 
