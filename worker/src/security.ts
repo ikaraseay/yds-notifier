@@ -105,7 +105,11 @@ export function newNonce(): string {
 
 export function securityHeaders(): Record<string, string> {
   return {
-    "Cache-Control": "no-store",
+    // no-transform：声明不许中间层改写响应体。Cloudflare 会往 HTML 的 </body> 前
+    // 注入 Web Analytics 探针和邮件混淆脚本，页面上有 nonce 时它们被放行（等于替
+    // 用户装了第三方统计），没有 nonce 时被 CSP 拦下（控制台多两条 blocked）。
+    // 两种结果都不想要，所以在源头拒绝改写。
+    "Cache-Control": "no-store, no-transform",
     "X-Frame-Options": "DENY",
     "Referrer-Policy": "no-referrer",
     "X-Content-Type-Options": "nosniff",
