@@ -122,6 +122,15 @@ class Settings:
     unsub_ttl_days: int
     subscribe_api_token: str
 
+    # 状态存储（Cloudflare R2，S3 兼容）。三项凭证 + bucket 齐全即启用；
+    # STATE_BACKEND=local 可强制回到"本地文件 + git 回写"。
+    state_backend: str
+    r2_account_id: str
+    r2_access_key_id: str
+    r2_secret_access_key: str
+    r2_bucket: str
+    r2_prefix: str
+
     # AI 分析（OpenAI 兼容接口，默认 DeepSeek）
     # 提示词版本不在这里：由 prompts/manifest.yaml 的 active 决定，避免双源
     ai_enabled: bool
@@ -171,6 +180,12 @@ class Settings:
             unsub_secret=_s("UNSUB_SECRET"),
             unsub_ttl_days=max(1, _i("UNSUB_TTL_DAYS", 180)),
             subscribe_api_token=_s("SUBSCRIBE_API_TOKEN"),
+            state_backend=_s("STATE_BACKEND", "auto").lower(),
+            r2_account_id=_s("R2_ACCOUNT_ID"),
+            r2_access_key_id=_s("R2_ACCESS_KEY_ID"),
+            r2_secret_access_key=_s("R2_SECRET_ACCESS_KEY"),
+            r2_bucket=_s("R2_BUCKET"),
+            r2_prefix=_s("R2_PREFIX", "state"),
             ai_enabled=_b("AI_ENABLED", True),
             ai_api_key=_s("AI_API_KEY"),
             ai_base_url=_s("AI_BASE_URL", "https://api.deepseek.com").rstrip("/"),

@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import atexit
 import json
 import logging
 import os
@@ -50,11 +51,48 @@ from .schedule import (
 )
 from .sources import BaseSource, build_sources
 from .state import State
+from .store import StateConflict, StateUnavailable, build_store
 from .unsub import build_unsubscribe_url
 
 log = logging.getLogger("yds")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(ROOT, "data")
+
+
+def _push_state(store) -> None:
+    """把本轮改过的状态写回对象存储。
+
+    放在 atexit 里：main() 有十几个 return 分支（基线、追赶、无新内容、
+    只有提醒……），逐个补 push 迟早漏一个，而漏掉就意味着下一轮重复发信。
+
+    失败时落一个 `.state-push-failed` 标记：atexit 改不了退出码，
+    由 CI 读这个文件把任务标红，避免"状态没写回但流水线是绿的"。
+    """
+    marker = os.path.join(DATA_DIR, ".state-push-failed")
+    try:
+        res = store.push(DATA_DIR)
+        log.info(
+            "状态已写回 R2：上传 %s 个，未变跳过 %s 个",
+            len(res["uploaded"]), len(res["skipped"]),
+        )
+        if os.path.exists(marker):
+            os.remove(marker)
+    except StateConflict as exc:
+        # 绝不覆盖别人的写入：宁可这轮状态滞后，也不能把对方的"已推送"标记冲掉
+        log.error("状态写回冲突，保留远端版本（下一轮会重算）：%s", exc)
+        _mark_push_failed(marker, f"conflict: {exc}")
+    except Exception as exc:  # noqa: BLE001 - 写回失败不能影响已经发出的邮件
+        log.error("状态写回 R2 失败，本轮状态可能滞后：%s", str(exc)[:200])
+        _mark_push_failed(marker, str(exc)[:200])
+
+
+def _mark_push_failed(path: str, reason: str) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(reason + "\n")
+    except OSError:
+        pass
 
 
 def load_config(path: str) -> dict:
@@ -199,6 +237,23 @@ def main(argv: List[str] | None = None) -> int:
     if writes_state and not run_lock.acquire():
         log.error("已有一个实例在运行（data/.run.lock 被占用），本轮跳过以免重复发信 / 覆盖状态")
         return 2
+
+    # 状态后端：配置了 R2 就把 data/*.json 从对象存储拉下来（远端是唯一事实源），
+    # 结束时由 atexit 统一写回。未配置时完全走本地文件，行为与改造前一致。
+    store = build_store(settings)
+    if store:
+        try:
+            pulled = store.pull(DATA_DIR)
+        except StateUnavailable as exc:
+            # 关键：本地 data/*.json 可能只是仓库里的陈旧副本。拿它当基线会把
+            # 这些天推过的通知重新发一遍，所以配了 R2 却读不到就必须停。
+            log.error("状态后端不可用，已中止（避免用陈旧状态重复群发）：%s", exc)
+            return 2
+        log.info(
+            "状态后端：R2 %s/%s，拉取 %s 个对象", settings.r2_bucket, settings.r2_prefix, pulled,
+        )
+        if writes_state:
+            atexit.register(_push_state, store)
 
     sender = build_client(cfg.get("mail") or {})
     static_to = args.to or settings.mail_to

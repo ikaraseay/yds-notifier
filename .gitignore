@@ -32,7 +32,11 @@ preview.html
 .DS_Store
 # 单实例运行锁：进程退出自动释放，不入库
 data/.run.lock
+data/.state-push-failed
 data/*.tmp
+data/*.r2tmp
+# R2 状态的本地预览副本（scripts/r2_state.py pull 默认落这里）
+.r2-preview/
 
 # 保留去重状态文件（Actions 需要提交它）
 !data/seen.json

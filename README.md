@@ -377,6 +377,76 @@ sources:
 `PUBLISH_NOTICES`（归档同步开关）、`HEARTBEAT_URL`（外部 dead-man switch 的 ping 地址）与
 `ALERT_WEBHOOK_URL`（失败时接收 POST JSON 的告警地址）。空值会被同步脚本跳过。
 
+#### 状态存储放到 R2（可选，推荐）
+
+默认仍把 `data/*.json` 提交回仓库（旧行为，零配置）。填了下面五项，状态就改放
+Cloudflare R2：仓库里不再出现 bot 的状态提交，也不再有 `git pull --rebase` 冲突。
+
+| 变量 | 说明 |
+|---|---|
+| `R2_ACCOUNT_ID` | Cloudflare 账户 ID（R2 页右上角可复制） |
+| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 → 管理 API 令牌 → 创建「对象读写」令牌后得到 |
+| `R2_BUCKET` | 桶名，例如 `yds-state`；为空即不启用 |
+| `R2_PREFIX` | 对象前缀，默认 `state`（多个环境可共用一个桶） |
+| `STATE_BACKEND` | `auto`（默认）/ `local`（强制回到 git 回写） |
+
+对象布局是 `state/<文件名>.json.gz`，一个状态一个对象；远端 gzip 后约 **166 KB**
+（原 `ai.json` 572 KB）。上传带 `If-Match` 条件写：**远端被别人改过就报冲突并保留对方版本**，
+不会静默覆盖。内容没变的文件不会产生任何写操作。
+
+两条保护，都是为了避免"把老通知再群发一遍"：
+
+- 配了 R2 但**读不到**（网络 / 权限 / 桶名错）→ 直接中止，不拿仓库里的陈旧副本当基线；
+- 首次写回会落一个 `state/_ready.json` 标记。今后若**标记还在、状态对象全丢**
+  （桶被清空 / 前缀写错）→ 同样中止，而不是误判成首次运行。
+
+写回失败时应用会落 `data/.state-push-failed`，CI 的「保存状态」步骤检测到就把构建标红 ——
+`atexit` 改不了退出码，但流水线不能是绿的。
+
+首次启用只需一条命令（顺序是为了**让远端基线等于最新已发布状态**，
+否则下一轮会把这几天推过的通知再发一遍）：
+
+```bash
+# 桶已建好（yds-state）。先在控制台 R2 → Manage API Tokens 建一个
+# Object Read & Write、仅限 yds-state 的令牌，然后：
+R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… bash scripts/ops.sh r2 enable
+```
+
+脚本会依次做五件事，任何一步不通过就停下：凭证落 `.env` → 连通性检查 →
+用 `origin/main` 的 `data/` 快照建立远端基线 → 逐对象比对（必须全「一致」）→
+最后才同步 GitHub Secrets 切换 CI。`--dry-run` 只看不动，`--no-secrets` 只建基线。
+
+日常都用 `ops.sh r2` 这一个入口：
+
+| 命令 | 用途 |
+|---|---|
+| `ops.sh r2` / `r2 status` | 列远端对象、字节数、时间戳 |
+| `ops.sh r2 diff` | 本地 `data/` 与远端逐对象比对（哪些会被上传） |
+| `ops.sh r2 refresh` | 用最新 `origin/main` 覆盖远端基线（发布前对齐） |
+| `ops.sh r2 seed` | 建基线（远端已有状态时拒绝，`--force` 才覆盖） |
+| `ops.sh r2 pull` | 拉到 `.r2-preview/` 检查，不动 `data/` |
+| `ops.sh r2 enable` | 首次启用 / 换凭证后重跑 |
+
+`ops.sh doctor` 与 `ops.sh status` 也会带上状态后端：前者验证 R2 可达并检查
+本地与远端是否漂移，后者只显示一行摘要。
+
+凭证格式有个坑：R2 的 **Access Key ID 等于 API 令牌的 id**（32 位十六进制），
+**Secret 等于令牌的 sha256**（64 位十六进制）。控制台建令牌时会直接给这两个值，
+粘成令牌本身（`cfat_…`）S3 会报 `Credential access key has length 53, should be 32`。
+
+状态一旦切到 R2，CI 就不再提交 `data/*.json`。但如果**代码还没上线**（CI 仍跑旧版、
+继续把状态写回 git），远端的基线会落后于仓库。这种窗口期里每次发布前先对齐一次：
+
+```bash
+bash scripts/ops.sh r2 refresh   # = r2-enable.sh --refresh --no-secrets
+```
+
+否则上线首轮会拿旧基线比对，把窗口期内推过的通知再发一遍。
+
+单独排查用 `scripts/r2_state.py`：`check` 列远端对象、`diff` 比对哈希、
+`seed` 建基线（远端已有状态时拒绝执行，`--force` 才覆盖）、`pull --to DIR` 拉到临时目录。
+它只读写对象存储，不抓取、不发信、不动 `data/`。
+
 ### 4. 推送与验证
 
 ```bash
@@ -492,6 +562,10 @@ yds-notifier/
     ├── config.py                 # 统一读取 .env 与域名派生
     ├── models.py · fetch.py · sources.py · state.py
     ├── mailer.py · senders.py · recipients.py · unsub.py
+    ├── store/                    # 状态存储层：R2（S3 兼容）+ 本地文件回退
+    │   ├── r2.py                 # 拉取 / 上传 / gzip / If-Match 条件写
+    │   └── __init__.py           # 对外只暴露 build_store / STATE_FILES
+    ├── lock.py                   # 单实例运行锁（flock）
     ├── dispatch.py               # 即时 / 日报 / 周报 / 暂停的发信编排
     ├── publish.py                # 通知元数据 → Worker（归档 / RSS / 日历）
     ├── main.py · __main__.py     # 命令行入口
