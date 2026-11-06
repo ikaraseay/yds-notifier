@@ -746,7 +746,7 @@ const check = (name, cond, extra = "") => {
   check("归档页含 AI 摘要", r.text.includes("决赛 8 月 10 日在桐乡举行"));
   check("归档页转义脚本", !r.text.includes("<script>alert(1)</script>")
     && r.text.includes("&lt;script&gt;"));
-  check("归档页含真实事件日", r.text.includes("决赛举行：2026-08-10"));
+  check("归档页含真实事件日", r.text.includes("决赛举行：") && r.text.includes("2026-08-10"));
   check("归档页标出重要", r.text.includes("重要"));
 
   r = await call("/feed.xml");
@@ -839,7 +839,8 @@ const check = (name, cond, extra = "") => {
 
   r = await call("/archive");
   check("归档显示阶段", r.text.includes("报名"), r.text.slice(0, 200));
-  check("归档显示人群", r.text.includes("面向：参赛学生 / 指导教师"));
+  check("归档显示人群", r.text.includes("面向：")
+    && r.text.includes("参赛学生") && r.text.includes("指导教师"));
   check("非法人群被丢弃", !r.text.includes("hacker"));
   check("归档显示行动建议", r.text.includes("要做什么："));
   check("行动建议被转义", r.text.includes("&lt;b&gt;") && !r.text.includes("<b>在 11 月"));
@@ -1063,6 +1064,36 @@ const check = (name, cond, extra = "") => {
   r = await call("/archive");
   check("写入后缓存已失效", env.SUBS.reads >= 1, String(env.SUBS.reads));
   check("写入后归档内容正确", r.text.includes("关于报名截止的通知"));
+
+  console.log("\n[36] 归档页新版式（Memphis 设计）");
+
+  r = await call("/archive");
+  check("归档用独立整页版式", r.text.includes('class="container"') && r.text.includes('class="header"'));
+  check("归档标题带高亮块", r.text.includes("研电赛<span class=\"hl\">通知</span>"));
+  check("归档有统计条", r.text.includes('class="stats"') && r.text.includes("项赛事"));
+  check("归档有赛事筛选", r.text.includes("赛事筛选") && r.text.includes('class="cscr"'));
+  check("归档有分类筛选", r.text.includes("通知分类"));
+  check("归档有视图切换", r.text.includes("通知列表") && r.text.includes("日历视图"));
+  check("归档有导出栏", r.text.includes('class="ebar"') && r.text.includes("订阅 RSS"));
+  check("归档点阵背景样式", r.text.includes("radial-gradient"));
+  check("归档不引入公开日历链接", !r.text.includes('href="/calendar.ics"'));
+
+  r = await call("/archive?category=" + encodeURIComponent("报名参赛"));
+  check("分类筛选命中", r.text.includes("关于报名截止的通知"));
+  check("分类筛选项高亮", r.text.includes('class="fb act"'));
+  r = await call("/archive?category=" + encodeURIComponent("不存在的分类"));
+  check("分类筛选为空提示", r.text.includes("没有符合筛选条件的通知"));
+
+  r = await call("/archive?important=1");
+  check("只看重要命中高优通知", r.text.includes("关于报名截止的通知") && r.text.includes("重要"));
+
+  r = await call("/archive?view=cal&m=2026-11");
+  check("日历视图渲染月历", r.text.includes('class="calv"') && r.text.includes("2026 年 11 月"));
+  check("日历视图含当月事件", r.text.includes("2026-11-25"));
+  check("日历视图有图例", r.text.includes("截止日期") && r.text.includes("赛事活动"));
+
+  r = await call("/archive?contest=" + encodeURIComponent("<script>alert(1)</script>"));
+  check("筛选参数被转义", !r.text.includes("<script>alert(1)</script>"));
 
   console.log(`\n结果：${pass} 项通过${process.exitCode ? "，存在失败" : "，全部通过"}`);
 })();

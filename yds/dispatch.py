@@ -214,9 +214,10 @@ def dispatch(
                     if rcpt.email not in result.failed:
                         result.failed.append(rcpt.email)
 
-    # 4) 摘要窗口：每天 digest_hour 的第一个 10 分钟；周报只在周一
+    # 4) 摘要窗口：digest_hour 这一小时内都算（GitHub 定时任务可能晚到几十分钟）；
+    #    发完会清空摘要池，所以同一小时多跑一次也不会重复发。周报只在周一。
     now = datetime.now()
-    in_window = now.hour == digest_hour and now.minute < 10
+    in_window = now.hour == digest_hour
     due = {"daily": in_window, "weekly": in_window and now.weekday() == 0}
 
     for key, users in digest_users.items():

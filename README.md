@@ -55,7 +55,7 @@
 
 研电赛的赛事通知分散在多个主办方网站，人工刷新既费时又容易错过报名、评审与决赛节点。本项目把这件事自动化：
 
-- **每 10 分钟**检查研创网的多个栏目与主办方公告，用稳定 UID 与 `data/seen.json` 比对；
+- **每小时**检查研创网的多个栏目与主办方公告，用稳定 UID 与 `data/seen.json` 比对；
 - 只有发现新条目时才抓取详情页补摘要与附件，然后渲染成一封分组邮件；
 - 订阅者通过 Cloudflare Worker 自助完成订阅、登录、栏目偏好调整与退订，推送时按偏好过滤；
 - 每封邮件的退订链接**按邮箱单独签名**，附带 RFC 8058 一键退订头。
@@ -114,7 +114,7 @@
 | 层 | 技术 |
 |---|---|
 | 抓取与发信 | Python 3.11 · requests · BeautifulSoup 4 · PyYAML · python-dotenv · Resend |
-| 定时任务 | GitHub Actions（`*/10 * * * *`） |
+| 定时任务 | GitHub Actions（`0 * * * *`，每小时） |
 | 订阅中心 | Cloudflare Workers · TypeScript · esbuild · Wrangler |
 | 状态存储 | Workers KV（账号 / 订阅 / 会话） · Durable Objects（限流） |
 | 部署 | Cloudflare Workers Builds · Custom Domains |
@@ -130,7 +130,7 @@
 flowchart LR
     S1["研创网 · 大赛通知"]
     S2["中国电子学会 · 通知公告"]
-    P["Python 抓取 / 去重 / 渲染<br/>GitHub Actions · 每 10 分钟"]
+    P["Python 抓取 / 去重 / 渲染<br/>GitHub Actions · 每小时"]
     DB[("data/seen.json<br/>去重基线")]
     API["GET /api/list<br/>Bearer SUBSCRIBE_API_TOKEN"]
     W["Cloudflare Worker<br/>订阅 / 登录 / 控制台 / 退订"]
@@ -384,7 +384,7 @@ git push origin main
 ```
 
 推送后 Workers Builds 自动部署；到 Actions 手动 **Run workflow**（mode `normal`）验证发信。
-首次运行会建立去重基线并发送一封最近 8 条的确认邮件，之后每 10 分钟自动检查；
+首次运行会建立去重基线并发送一封最近 8 条的确认邮件，之后每小时自动检查；
 无新公告时直接结束、不重复发信、不产生状态提交。
 
 > 完整的环境信息清单（含每一项填到哪里）见
@@ -506,8 +506,8 @@ yds-notifier/
 | 公开内容 | `/archive` 归档页、`/feed.xml` RSS 无需登录；日历只对本人签发，无签名返回 401 |
 | 日历 | 从标题 / 摘要抽取报名截止与赛程日期，事件 UID 稳定，延期时原地更新 |
 | 名单卫生 | Resend webhook 验签后自动移除硬退信与投诉地址，并写入抑制标记 |
-| 检查间隔 | 10 分钟（cron `*/10 * * * *`） |
-| 实际延迟 | 通常 10 分钟内，GitHub 高峰期可能多几分钟 |
+| 检查间隔 | 每小时（cron `0 * * * *`） |
+| 实际延迟 | GitHub 的 schedule 不保证准时，实测可能延后 1–3 小时；每日有一次全量兜底 |
 | 单次成本 | 无新公告时只请求列表页，不抓详情页 |
 | 费用 | 仓库需为 **Public** 才完全免费（Private 仓库 144 次/天会超出免费分钟数） |
 
