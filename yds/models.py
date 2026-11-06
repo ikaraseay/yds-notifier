@@ -240,6 +240,15 @@ class Notice:
         return False
 
 
+def by_recency(notices: List["Notice"]) -> List["Notice"]:
+    """按发布时间倒序（无日期的垫底）。
+
+    追赶 / 基线截断用它挑「最近 N 条」，再交给 sort_notices 排展示顺序：
+    只按重要度截断会把陈年旧文（决赛、截止等高权重）顶进邮件。
+    """
+    return sorted(notices, key=lambda n: n.published or date.min, reverse=True)
+
+
 def make_uid(source_key: str, ident: str) -> str:
     """生成稳定去重键。
 
