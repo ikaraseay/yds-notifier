@@ -372,9 +372,20 @@ def main(argv: List[str] | None = None) -> int:
         return 0
 
     fresh = sort_notices(list(merged.values()))
+    catchup_dropped = 0
     if first_run and cfg.get("on_first_run", "baseline") == "baseline":
         fresh = fresh[: int(cfg.get("baseline_size", 8))]
         log.info("首次运行，建立基线（%s 条），本轮推送最近 %s 条", len(meta), len(fresh))
+    elif len(fresh) > int(cfg.get("catchup_threshold", 15)):
+        # 扩充数据源 / 长时间停摆后，单轮会出现几十条「新条目」。
+        # 一次性全发既吵又容易进垃圾箱：只推最近 N 条，其余静默归档。
+        size = max(1, int(cfg.get("catchup_size", 8)))
+        catchup_dropped = max(0, len(fresh) - size)
+        log.info(
+            "单轮新增 %s 条超过阈值 %s，按追赶模式只推最近 %s 条，其余 %s 条静默归档",
+            len(fresh), cfg.get("catchup_threshold", 15), size, catchup_dropped,
+        )
+        fresh = fresh[:size]
 
     if args.preview:
         preview_email = (split_recipients(static_to) or [""])[0]
@@ -437,6 +448,9 @@ def main(argv: List[str] | None = None) -> int:
         for n in meta:
             all_marked.setdefault(n.uid, n)
         state.mark(list(all_marked.values()))
+    elif catchup_dropped:
+        # 追赶模式：未推送的条目也要标已读，否则下一轮会继续补发，形成连续轰炸
+        state.mark(list(merged.values()))
     else:
         state.mark(fresh)
     state.save()
