@@ -935,5 +935,77 @@ const check = (name, cond, extra = "") => {
   r = await call("/calendar.ics?contest=" + encodeURIComponent("电子设计竞赛") + "&audience=student");
   check("角色链接仍保留赛程", r.text.includes("【报名截止】电子设计竞赛"));
 
+  console.log("\n[34] 个人日历：按订阅者偏好过滤");
+
+  // 与 Worker 的 signEmailToken 保持同一契约：sig = hmac(secret, `${purpose}:${email}:${exp}`)[:32]
+  const emailToken = (email, purpose, ttlDays = 3650) => {
+    const exp = Math.floor(Date.now() / 1000) + ttlDays * 86400;
+    const sig = crypto
+      .createHmac("sha256", env.UNSUB_SECRET)
+      .update(`${purpose}:${email.toLowerCase()}:${exp}`)
+      .digest("hex")
+      .slice(0, 32);
+    return `${exp}.${sig}`;
+  };
+  const calUrl = (email, purpose = "cal") =>
+    `/calendar.ics?email=${encodeURIComponent(email)}&token=${emailToken(email, purpose)}`;
+
+  // 先把这位订阅者的偏好恢复成「研电赛 + 全角色」
+  await call("/api/prefs", {
+    method: "POST",
+    body: JSON.stringify({
+      audiences: { student: true, advisor: true, admin: true, organizer: true },
+      contests: ["电子设计竞赛"],
+    }),
+    headers: { Cookie: `yds_sid=${freshSid}` },
+  });
+
+  r = await call(calUrl(pEmail));
+  check("签名日历 200", r.status === 200 && r.text.includes("BEGIN:VCALENDAR"), r.status);
+  check("个人日历包含关注赛事的事件", r.text.includes("UID:p1@"));
+  check("个人日历名标出角色", r.text.includes("参赛学生"), r.text.slice(0, 400));
+  check("个人日历仍带官方赛程", r.text.includes("【报名截止】电子设计竞赛"));
+
+  // 改成只关注别的赛事 → 该公告的事件必须消失，公开日历不受影响
+  await call("/api/prefs", {
+    method: "POST",
+    body: JSON.stringify({ contests: ["人工智能创新大赛"] }),
+    headers: { Cookie: `yds_sid=${freshSid}` },
+  });
+  r = await call(calUrl(pEmail));
+  check("未关注赛事的事件被过滤", !r.text.includes("UID:p1@"));
+  check("赛程随赛事偏好收敛", !r.text.includes("【报名截止】电子设计竞赛"));
+  r = await call("/calendar.ics");
+  check("公开日历仍含全部事件", r.text.includes("UID:p1@"));
+
+  // 角色过滤：只留培养单位 → student/advisor 的通知被过滤
+  await call("/api/prefs", {
+    method: "POST",
+    body: JSON.stringify({
+      audiences: { student: false, advisor: false, admin: true, organizer: false },
+      contests: ["电子设计竞赛"],
+    }),
+    headers: { Cookie: `yds_sid=${freshSid}` },
+  });
+  r = await call(calUrl(pEmail));
+  check("角色不符的事件被过滤", !r.text.includes("UID:p1@"));
+  check("赛程按赛事保留", r.text.includes("【报名截止】电子设计竞赛"));
+
+  // 用途隔离：退订 token 不能当个人日历 token 用（此时偏好已排除 p1，
+  // 若仍返回 p1 说明签名没通过、退回了公开日历）
+  r = await call(calUrl(pEmail, "unsub"));
+  check("退订 token 不能读个人日历", r.text.includes("UID:p1@"));
+
+  // 签名被篡改 → 同样退回公开日历，不泄露偏好
+  r = await call(
+    `/calendar.ics?email=${encodeURIComponent(pEmail)}&token=${emailToken(pEmail, "cal").slice(0, -1)}0`,
+  );
+  check("篡改签名退回公开日历", r.text.includes("UID:p1@"));
+
+  // 控制台给出个人日历地址
+  r = await call("/dashboard", { headers: { Cookie: `yds_sid=${freshSid}` } });
+  check("控制台含「我的日历」", r.text.includes("我的日历"));
+  check("控制台日历地址带签名", r.text.includes("calendar.ics?email=") && r.text.includes("token="));
+
   console.log(`\n结果：${pass} 项通过${process.exitCode ? "，存在失败" : "，全部通过"}`);
 })();

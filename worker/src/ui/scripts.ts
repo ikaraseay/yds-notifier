@@ -150,6 +150,21 @@ export const PREFS_SCRIPT = `
     });
   });
 
+  var copyCal = document.getElementById('copyCal');
+  var calField = document.getElementById('calUrl');
+  if (copyCal && calField) copyCal.addEventListener('click', function () {
+    calField.select();
+    var done = function (ok) {
+      feedback(ok ? 'ok' : 'err', ok ? '日历地址已复制' : '复制失败，请手动选中复制');
+    };
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(calField.value).then(function () { done(true); },
+        function () { done(false); });
+    } else {
+      try { done(document.execCommand('copy')); } catch (e) { done(false); }
+    }
+  });
+
   var del = document.getElementById('del');
   if (del) del.addEventListener('click', function () {
     if (!confirm('注销后账号、订阅记录和栏目设置都会被删除，且无法恢复。确定继续吗？')) return;

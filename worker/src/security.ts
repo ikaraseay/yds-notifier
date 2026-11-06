@@ -26,40 +26,67 @@ export function safeEqual(a: string, b: string): boolean {
 }
 
 /**
- * 校验退订 token，与 Python 端 yds/unsub.py 的契约：
+ * 邮箱 token 的通用校验，与 Python 端 yds/unsub.py 的契约：
  *   token = "<exp>.<sig>"
- *   sig   = hmac_sha256(UNSUB_SECRET, `unsub:${email}:${exp}`)[:32]
+ *   sig   = hmac_sha256(UNSUB_SECRET, `${purpose}:${email}:${exp}`)[:32]
  *   exp   = Unix 秒，必须落在 (now, now + ttl] 之间
+ *
+ * `purpose` 隔离用途：退订是 `unsub`，个人日历是 `cal`。两者互不通用，
+ * 因此日历链接泄漏也无法被拿去退订。
  *
  * 明确拒绝 exp=0（旧版"永久链接"）—— 它既无法撤销，历史上还因
  * Worker 把 0 判成过期导致退订链接全部失效。
  */
-export async function verifyUnsubToken(
+export async function verifyEmailToken(
   env: Pick<Env, "UNSUB_SECRET" | "UNSUB_SECRET_PREVIOUS">,
   email: string,
   token: string,
+  purpose: string,
   maxTtlDays: number,
 ): Promise<boolean> {
-  if (!env.UNSUB_SECRET || !email || !token) return false;
+  if (!env.UNSUB_SECRET || !email || !token || !purpose) return false;
   const parts = token.split(".");
   if (parts.length !== 2) return false;
   const [expRaw, sig] = parts;
-  if (!/^\d{1,12}$/.test(expRaw) || !/^[0-9a-f]{32}$/.test(sig)) return false;
+  if (!/^\d{1,13}$/.test(expRaw) || !/^[0-9a-f]{32}$/.test(sig)) return false;
 
   const ts = Number(expRaw);
   const now = Date.now();
   if (!Number.isFinite(ts) || ts * 1000 <= now) return false;
-  // 上限留 30 天容差：Python 与 Worker 的 UNSUB_TTL_DAYS 允许有配置漂移，
+  // 上限留 30 天容差：Python 与 Worker 的 TTL 允许有配置漂移，
   // 但绝不接受「永久有效」或远期 token。
   if (ts * 1000 > now + (maxTtlDays + 30) * 86_400_000) return false;
 
-  const msg = `unsub:${email.toLowerCase()}:${ts}`;
+  const msg = `${purpose}:${email.toLowerCase()}:${ts}`;
   for (const secret of [env.UNSUB_SECRET, env.UNSUB_SECRET_PREVIOUS]) {
     if (!secret) continue;
     const expect = (await hmac(secret, msg)).slice(0, 32);
     if (safeEqual(sig, expect)) return true;
   }
   return false;
+}
+
+/** 退订 token 校验（purpose=unsub）。 */
+export function verifyUnsubToken(
+  env: Pick<Env, "UNSUB_SECRET" | "UNSUB_SECRET_PREVIOUS">,
+  email: string,
+  token: string,
+  maxTtlDays: number,
+): Promise<boolean> {
+  return verifyEmailToken(env, email, token, "unsub", maxTtlDays);
+}
+
+/** 签发绑定邮箱的 token（控制台展示个人日历链接时用）。 */
+export async function signEmailToken(
+  secret: string,
+  email: string,
+  purpose: string,
+  ttlDays: number,
+): Promise<string> {
+  if (!secret || !email || !purpose) return "";
+  const exp = Math.floor(Date.now() / 1000) + Math.max(1, Math.floor(ttlDays)) * 86_400;
+  const sig = (await hmac(secret, `${purpose}:${email.toLowerCase()}:${exp}`)).slice(0, 32);
+  return `${exp}.${sig}`;
 }
 
 export function esc(v: unknown): string {

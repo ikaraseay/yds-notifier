@@ -5,8 +5,9 @@
  * 读取侧再清洗一次，避免 KV 被直接写入时把脏数据带进对外页面。
  */
 
+import { getUser, type Prefs } from '../auth';
 import { getConfig, type Env } from '../env';
-import { esc, safeEqual, securityHeaders } from '../security';
+import { esc, safeEqual, securityHeaders, signEmailToken, verifyEmailToken } from '../security';
 import { jsonResp, page } from '../ui/layout';
 
 interface Attachment {
@@ -373,6 +374,52 @@ function filterByUrl<T extends { contest?: string; audiences?: string[] }>(items
   });
 }
 
+/** 个人日历 token 的有效期：加一次长期使用，给足 10 年。 */
+export const CAL_TTL_DAYS = 3650;
+
+/**
+ * 从 `?email=&token=` 解析订阅者偏好。
+ *
+ * 没有签名 / 签名不对 / token 过期都返回 null → 退回公开日历。
+ * 这里刻意不返回 403：日历客户端看到错误只会静默停止同步，
+ * 用户反而不知道链接失效了；退回「全部通知」至少内容仍在。
+ */
+async function prefsFromUrl(env: Env, url: URL): Promise<Prefs | null> {
+  const email = (url.searchParams.get('email') || '').trim().toLowerCase();
+  const token = (url.searchParams.get('token') || '').trim();
+  if (!email || !token) return null;
+  if (!(await verifyEmailToken(env, email, token, 'cal', CAL_TTL_DAYS))) return null;
+  const user = await getUser(env.SUBS, email);
+  return user?.prefs ?? null;
+}
+
+/** 按订阅者偏好过滤事件：赛事取交集，角色取并集；全站级通知不受赛事筛选影响。 */
+function applyPrefs<T extends { contest?: string; audiences?: string[] }>(
+  items: T[],
+  prefs: Prefs | null,
+): T[] {
+  if (!prefs) return items;
+  const contests = (prefs.contests || []).filter(Boolean);
+  const roles = AUDIENCES.filter((a) => prefs.audiences?.[a as keyof typeof prefs.audiences]);
+  return items.filter((n) => {
+    if (contests.length && n.contest && !contests.includes(n.contest)) return false;
+    // 与邮件端一致：角色一个都没勾等价于「不限制」（历史账号字段缺失时也走这里）
+    if (!roles.length) return true;
+    const auds = n.audiences || [];
+    if (auds.length && !auds.some((a) => roles.includes(a))) return false;
+    return true;
+  });
+}
+
+/** 控制台展示的个人日历地址（签名绑定邮箱，只读）。 */
+export async function personalCalendarUrl(env: Env, email: string): Promise<string> {
+  const base = getConfig(env).baseUrl;
+  if (!base || !email) return "";
+  const token = await signEmailToken(env.UNSUB_SECRET, email, "cal", CAL_TTL_DAYS);
+  if (!token) return `${base}/calendar.ics`;
+  return `${base}/calendar.ics?email=${encodeURIComponent(email.toLowerCase())}&token=${token}`;
+}
+
 export async function handleArchive(req: Request, env: Env): Promise<Response> {
   const url = new URL(req.url);
   try {
@@ -518,16 +565,26 @@ export async function handleCalendar(req: Request, env: Env): Promise<Response> 
   });
   try {
     const cfg = getConfig(env);
-    const notices = filterByUrl(await loadNotices(env), url);
+    const prefs = await prefsFromUrl(env, url);
+    const notices = applyPrefs(filterByUrl(await loadNotices(env), url), prefs);
     const scopedContest = (url.searchParams.get('contest') || '').trim();
     const scopedAudience = (url.searchParams.get('audience') || '').trim();
+    // 订阅者关注的赛事：没有显式 contest 参数时按个人偏好收敛赛程
+    const myContests = (prefs?.contests || []).filter(Boolean);
     // 赛程是赛事级数据，没有角色属性：只按赛事过滤，避免角色链接把赛程全丢掉
-    const schedule = (await loadSchedule(env)).filter(
-      (s) => !scopedContest || s.contest === scopedContest,
-    );
+    const schedule = (await loadSchedule(env)).filter((s) => {
+      if (scopedContest) return s.contest === scopedContest;
+      if (!prefs) return true;
+      return !myContests.length || myContests.includes(s.contest);
+    });
+    const roleTag = prefs
+      ? AUDIENCES.filter((a) => prefs.audiences?.[a as keyof typeof prefs.audiences])
+          .map((a) => AUDIENCE_LABELS[a] || a)
+          .join('/')
+      : '';
     const calName = `${cfg.siteName}日历${scopedContest ? ` · ${scopedContest}` : ''}${
       scopedAudience ? ` · ${AUDIENCE_LABELS[scopedAudience] || scopedAudience}` : ''
-    }`;
+    }${roleTag ? ` · ${roleTag}` : ''}`;
     const stamp = utcStamp(new Date());
     const host = hostOf(cfg.baseUrl);
     const seenUid = new Set<string>();

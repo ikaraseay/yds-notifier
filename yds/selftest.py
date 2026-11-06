@@ -45,7 +45,12 @@ from .recipients import (
 from .schedule import ContestSchedule, ReminderLog, ScheduleStore, parse_schedule
 from .sources import CpipcZonesSource, build_sources
 from .state import State, load_pending, pending_notices, save_pending
-from .unsub import build_list_unsubscribe_headers, build_unsubscribe_url, make_email_token
+from .unsub import (
+    build_calendar_url,
+    build_list_unsubscribe_headers,
+    build_unsubscribe_url,
+    make_email_token,
+)
 
 PASS = 0
 FAIL = 0
@@ -536,6 +541,36 @@ def main() -> int:
     check("赛事日历链接带 contest", "calendar.ics?contest=" in html)
     check("赛事日历链接带角色", "audience=student" in html)
     check("赛事列表链接带 contest", "archive?contest=" in html)
+
+    print("\n[20] 个人日历与按偏好过滤")
+
+    cal = build_calendar_url("https://x.example/calendar.ics", "s3cret", "Stu@QQ.com")
+    check("个人日历链接非空", cal.startswith("https://x.example/calendar.ics?"), cal[:60])
+    check("个人日历带邮箱", "email=stu%40qq.com" in cal, cal[:80])
+    check("个人日历带 token", "token=" in cal and cal.count(".") >= 1)
+    check("缺参会返回空串", build_calendar_url("", "s3cret", "a@b.com") == "")
+    check("缺密钥返回空串", build_calendar_url("https://x/calendar.ics", "", "a@b.com") == "")
+
+    # 用途隔离：同一邮箱同一时刻，cal 与 unsub 的签名必须不同
+    cal_tok = make_email_token("s3cret", "a@b.com", 3650, purpose="cal")
+    unsub_tok = make_email_token("s3cret", "a@b.com", 3650, purpose="unsub")
+    check("cal 与 unsub 签名不同", cal_tok.split(".")[1] != unsub_tok.split(".")[1])
+    exp = cal_tok.split(".")[0]
+    want = hmac.new(b"s3cret", f"cal:a@b.com:{exp}".encode(), hashlib.sha256).hexdigest()[:32]
+    check("cal 签名可被 Worker 复算", cal_tok.split(".")[1] == want)
+
+    # 已带 query 的 base 要正确续接，不能出现两个问号
+    cal2 = build_calendar_url("https://x.example/calendar.ics?from=mail", "s3cret", "a@b.com")
+    check("已有 query 时用 & 续接", cal2.count("?") == 1 and "&email=" in cal2, cal2[:80])
+
+    # 邮件里的赛事链接：base 带签名参数时也要用 & 拼，且 URL 合法
+    html2 = build_html(
+        [n_edc], persona="student",
+        calendar_url="https://x.example/calendar.ics?email=a%40b.com&token=1.abc",
+        archive_url="https://x.example/archive",
+    )
+    check("赛事日历链接续接正确", "token=1.abc&amp;contest=" in html2)
+    check("邮件页脚含我的日历", html2.count("我的日历") >= 1)
 
     print(f"\n结果：{PASS} 项通过，{FAIL} 项失败")
     return 1 if FAIL else 0

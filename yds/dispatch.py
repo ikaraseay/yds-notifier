@@ -22,7 +22,7 @@ from .personas import AUDIENCE_NAMES, DEADLINE_STAGES, primary_audience
 from .recipients import Recipient
 from .senders import BaseSender
 from .state import load_pending, pending_notices, save_pending
-from .unsub import build_list_unsubscribe_headers, build_unsubscribe_url
+from .unsub import build_calendar_url, build_list_unsubscribe_headers, build_unsubscribe_url
 
 log = logging.getLogger("yds")
 
@@ -69,6 +69,13 @@ def _send_one(
         # 角色版邮件在主题上直接标出来，收件人一眼知道这是哪一版
         subject = f"〔{AUDIENCE_NAMES.get(persona, persona)}〕{subject}"
     base = (settings.public_base_url or "").rstrip("/")
+    public_cal = f"{base}/calendar.ics" if base else ""
+    # 个人日历：签名绑定邮箱，Worker 端据此按该用户的角色 / 赛事偏好过滤事件。
+    # 签发失败（没配 secret）时退回公开日历，绝不发无签名链接冒充个人版。
+    personal_cal = (
+        build_calendar_url(public_cal, settings.unsub_secret, rcpt.email)
+        if public_cal and settings.unsub_secret else ""
+    )
     html_body = build_html(
         mine,
         site=settings.site_name,
@@ -77,7 +84,7 @@ def _send_one(
         issue_url=f"{repo_url}/issues" if repo_url else "",
         compact_low=compact_low,
         persona=persona,
-        calendar_url=f"{base}/calendar.ics" if base else "",
+        calendar_url=personal_cal or public_cal,
         archive_url=f"{base}/archive" if base else "",
     )
     text_body = build_text(mine, site=settings.site_name, unsubscribe_url=unsub_for)

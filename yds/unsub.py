@@ -30,11 +30,17 @@ def _sign(secret: str, message: str) -> str:
     return hmac.new(secret.encode("utf-8"), message.encode("utf-8"), hashlib.sha256).hexdigest()[:32]
 
 
-def make_email_token(secret: str, email: str, ttl_days: int | None = None) -> str:
-    """签发绑定邮箱的退订 token。"""
+def make_email_token(
+    secret: str, email: str, ttl_days: int | None = None, purpose: str = "unsub"
+) -> str:
+    """签发绑定邮箱的 token。
+
+    `purpose` 是签名域：退订用 `unsub`，个人日历用 `cal`。两者互不通用，
+    这样一条日历链接泄漏也无法被拿去退订。
+    """
     days = ttl_days if ttl_days is not None else settings.unsub_ttl_days
     exp = int(time.time()) + max(1, days) * 86400
-    return f"{exp}.{_sign(secret, f'unsub:{email.lower()}:{exp}')}"
+    return f"{exp}.{_sign(secret, f'{purpose}:{email.lower()}:{exp}')}"
 
 
 def build_unsubscribe_url(base: str, secret: str, email: str, ttl_days: int | None = None) -> str:
@@ -55,3 +61,23 @@ def build_list_unsubscribe_headers(url: str) -> dict:
     if not url:
         return {}
     return {"List-Unsubscribe": f"<{url}>", "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"}
+
+
+# 日历订阅是「加一次、长期用」的链接，TTL 给足 10 年；
+# Worker 端按 purpose=cal 单独放宽上限，退订 token 的 180 天规则不受影响。
+CAL_TOKEN_DAYS = 3650
+
+
+def build_calendar_url(
+    base: str, secret: str, email: str, ttl_days: int | None = None
+) -> str:
+    """生成绑定邮箱的日历订阅地址 `https://.../calendar.ics?email=..&token=..`。
+
+    Worker 会校验签名并读出该用户的角色 / 赛事偏好，只把他关心的事件写进 ICS。
+    任一参数缺失都返回空串 —— 调用方据此回退到公开日历，绝不发无签名链接。
+    """
+    if not base or not secret or not email:
+        return ""
+    token = make_email_token(secret, email, ttl_days or CAL_TOKEN_DAYS, purpose="cal")
+    sep = "&" if "?" in base else "?"
+    return f"{base}{sep}email={quote(email.lower())}&token={token}"
