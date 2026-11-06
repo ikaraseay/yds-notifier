@@ -215,32 +215,58 @@ function normalizeSchedule(raw: unknown): ContestSchedule[] {
   return out;
 }
 
-/** 读 KV：读不到 / 解析失败都按空列表处理，绝不向外抛错。 */
-async function loadNotices(env: Env): Promise<Notice[]> {
+/**
+ * 通知 + 赛程存在同一条 KV 记录里，这里一次读出、两个视图共用。
+ *
+ * 之前 loadNotices / loadSchedule 各读一次同一个 key：一次日历请求就要 2 次 KV 读。
+ * 现在合并成 1 次，并加 60 秒的 isolate 内缓存 —— 同一个边缘节点上的高频轮询
+ * （归档页刷新、多个订阅者的日历同时拉取）基本不再回源 KV。
+ */
+interface FeedData {
+  notices: Notice[];
+  schedule: ContestSchedule[];
+}
+
+const FEED_TTL_MS = 60_000;
+let feedCache: { at: number; data: FeedData } | null = null;
+
+/** 写入新数据后必须清掉内存缓存，否则同一 isolate 会继续返回旧内容。 */
+export function invalidateFeed(): void {
+  feedCache = null;
+}
+
+async function loadFeed(env: Env): Promise<FeedData> {
+  const now = Date.now();
+  if (feedCache && now - feedCache.at < FEED_TTL_MS) return feedCache.data;
   try {
-    const raw = await env.SUBS.get('feed:notices');
-    if (!raw) return [];
-    const data = JSON.parse(raw) as FeedPayload;
-    if (!data || !Array.isArray(data.notices)) return [];
-    return (data.notices as unknown[])
-      .slice(0, 300)
-      .map(normalizeNotice)
-      .filter((n): n is Notice => n !== null);
+    // cacheTtl：让 Cloudflare 边缘缓存这次读取，60 秒内同节点不再回源 KV。
+    const raw = await env.SUBS.get('feed:notices', { cacheTtl: 60 });
+    if (!raw) {
+      feedCache = { at: now, data: { notices: [], schedule: [] } };
+      return feedCache.data;
+    }
+    const data = (JSON.parse(raw) || {}) as FeedPayload;
+    const notices = Array.isArray(data.notices)
+      ? (data.notices as unknown[])
+          .slice(0, 300)
+          .map(normalizeNotice)
+          .filter((n): n is Notice => n !== null)
+      : [];
+    const schedule = normalizeSchedule(data.schedule);
+    feedCache = { at: now, data: { notices, schedule } };
+    return feedCache.data;
   } catch {
-    return [];
+    // 解析失败时宁可返回上一次的好数据，也不要让所有订阅者的日历一起变空
+    return feedCache?.data ?? { notices: [], schedule: [] };
   }
 }
 
-/** 读 KV 里的官方赛程（与通知同一条记录，减少一次 KV 读）。 */
+async function loadNotices(env: Env): Promise<Notice[]> {
+  return (await loadFeed(env)).notices;
+}
+
 async function loadSchedule(env: Env): Promise<ContestSchedule[]> {
-  try {
-    const raw = await env.SUBS.get('feed:notices');
-    if (!raw) return [];
-    const data = JSON.parse(raw) as FeedPayload;
-    return normalizeSchedule(data.schedule);
-  } catch {
-    return [];
-  }
+  return (await loadFeed(env)).schedule;
 }
 
 /** 日期倒序（YYYY-MM-DD 可直接按字符串比较）。 */
@@ -323,6 +349,8 @@ export async function handleNoticesPost(req: Request, env: Env): Promise<Respons
   } catch {
     return jsonResp({ ok: false, message: 'store failed' }, 500);
   }
+  // 立刻失效本 isolate 的缓存：写完马上读（CI 的冒烟步骤、测试）必须是新数据
+  invalidateFeed();
   return jsonResp({ ok: true, count: notices.length, schedule: schedule.length });
 }
 
@@ -389,7 +417,8 @@ async function prefsFromUrl(env: Env, url: URL): Promise<Prefs | null> {
   const token = (url.searchParams.get('token') || '').trim();
   if (!email || !token) return null;
   if (!(await verifyEmailToken(env, email, token, 'cal', CAL_TTL_DAYS))) return null;
-  const user = await getUser(env.SUBS, email);
+  // 日历每 15 分钟轮询一次，偏好却很少改：60 秒边缘缓存足够，能挡住重试与多设备并发
+  const user = await getUser(env.SUBS, email, { cacheTtl: 60 });
   return user?.prefs ?? null;
 }
 
@@ -566,6 +595,12 @@ export async function handleCalendar(req: Request, env: Env): Promise<Response> 
   try {
     const cfg = getConfig(env);
     const prefs = await prefsFromUrl(env, url);
+    if (prefs) {
+      // 个人日历是「按人过滤」的内容：只允许浏览器 / 客户端私有缓存，
+      // 不让中间代理共享缓存后把别人的日程串给别人。
+      headers['Cache-Control'] = 'private, max-age=300';
+      headers['X-Robots-Tag'] = 'noindex, nofollow';
+    }
     const notices = applyPrefs(filterByUrl(await loadNotices(env), url), prefs);
     const scopedContest = (url.searchParams.get('contest') || '').trim();
     const scopedAudience = (url.searchParams.get('audience') || '').trim();

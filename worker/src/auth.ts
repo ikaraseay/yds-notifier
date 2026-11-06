@@ -252,8 +252,13 @@ export async function destroySession(kv: KVNamespace, token: string): Promise<vo
 
 /* ---------------------------- 用户 ---------------------------- */
 
-export async function getUser(kv: KVNamespace, email: string): Promise<User | null> {
-  const raw = await kv.get(`user:${email}`);
+export async function getUser(
+  kv: KVNamespace,
+  email: string,
+  opts?: { cacheTtl?: number },
+): Promise<User | null> {
+  // cacheTtl 让边缘节点缓存这次读取，降低高频只读场景（如日历轮询）的 KV 读次数
+  const raw = await kv.get(`user:${email}`, opts?.cacheTtl ? { cacheTtl: opts.cacheTtl } : undefined);
   if (!raw) return null;
   try {
     const u = JSON.parse(raw) as User;
