@@ -69,6 +69,13 @@ jobs:
       AI_TIMEOUT: ${{ secrets.AI_TIMEOUT || '60' }}
       AI_BATCH_SIZE: ${{ secrets.AI_BATCH_SIZE || '8' }}
       AI_MAX_BODY_CHARS: ${{ secrets.AI_MAX_BODY_CHARS || '3000' }}
+      # 状态存储：填了 R2 就不再往仓库提交状态文件（见「保存状态」步骤）
+      STATE_BACKEND: ${{ secrets.STATE_BACKEND || 'auto' }}
+      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
+      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      R2_BUCKET: ${{ secrets.R2_BUCKET }}
+      R2_PREFIX: ${{ secrets.R2_PREFIX || 'state' }}
       REPO_URL: ${{ github.server_url }}/${{ github.repository }}
       TZ: Asia/Shanghai
     steps:
@@ -118,9 +125,18 @@ jobs:
           curl -fsS --max-time 15 "$HEARTBEAT_URL" >/dev/null && echo "心跳已上报"
 
       # 把去重状态与摘要池提交回仓库，下次运行才知道发过什么、还有哪些摘要待发
+      # 配了 R2 时状态由应用自己写对象存储，这一步整体跳过（仓库里不再有状态提交）
       - name: 保存状态
         if: always() && github.event.inputs.mode != 'check'
         run: |
+          if [ -f data/.state-push-failed ]; then
+            echo "::error::状态写回 R2 失败，下一轮可能重复推送：$(cat data/.state-push-failed)"
+            exit 1
+          fi
+          if [ -n "$R2_BUCKET" ] && [ "$STATE_BACKEND" != "local" ]; then
+            echo "状态已写入 R2（$R2_BUCKET/$R2_PREFIX），跳过 git 回写"
+            exit 0
+          fi
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # 本轮无变化时 state 不会写文件，此时不应让 workflow 失败；

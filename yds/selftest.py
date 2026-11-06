@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import io
 import json
 import os
 import re
@@ -49,6 +50,7 @@ from .recipients import (
 from .schedule import ContestSchedule, ReminderLog, ScheduleStore, parse_schedule
 from .sources import CpipcZonesSource, build_sources
 from .state import State, load_pending, pending_notices, save_pending
+from .store import R2StateStore, StateConflict, StateUnavailable
 from .unsub import (
     build_calendar_url,
     build_list_unsubscribe_headers,
@@ -593,6 +595,93 @@ def main() -> int:
     first.release()
     check("释放后可再次获取", second.acquire() is True)
     second.release()
+
+    print("\n[22] 状态对象存储（R2）")
+
+    class FakeS3:
+        """最小 S3 桩：够验证 gzip、ETag 条件写、未变跳过这三件事。"""
+
+        def __init__(self):
+            self.objects = {}
+            self.puts = []
+            self.fail_precondition = False
+
+        def get_object(self, Bucket, Key):
+            if Key not in self.objects:
+                raise RuntimeError("NoSuchKey: %s" % Key)
+            body, etag = self.objects[Key]
+            return {"Body": io.BytesIO(body), "ETag": '"%s"' % etag}
+
+        def put_object(self, Bucket, Key, Body, **kw):
+            if self.fail_precondition:
+                raise RuntimeError("PreconditionFailed: If-Match did not match")
+            etag = hashlib.md5(Body).hexdigest()[:12]
+            self.objects[Key] = (Body, etag)
+            self.puts.append((Key, kw))
+            return {"ETag": '"%s"' % etag}
+
+    fake = FakeS3()
+    src = tempfile.mkdtemp()
+    with open(os.path.join(src, "seen.json"), "w", encoding="utf-8") as fh:
+        json.dump({"version": 2, "seen": {"a": 1}}, fh)
+    with open(os.path.join(src, "schedule.json"), "w", encoding="utf-8") as fh:
+        json.dump({"contests": []}, fh)
+
+    st = R2StateStore(bucket="bucket", prefix="state", client=fake)
+    check("R2 存储可用", st.enabled)
+    res = st.push(src)
+    check("首次上传全部对象", sorted(res["uploaded"]) == ["schedule.json", "seen.json"], str(res))
+    body = fake.objects["state/seen.json.gz"][0]
+    check("远端对象是 gzip", body[:2] == b"\x1f\x8b")
+    check("上传声明了 gzip 编码",
+          fake.puts[0][1].get("ContentEncoding") == "gzip")
+    check("首次上传不带 If-Match（对象还不存在）", "IfMatch" not in fake.puts[0][1])
+    check("首次写回落下初始化标记", "state/_ready.json" in fake.objects)
+
+    dst = tempfile.mkdtemp()
+    st2 = R2StateStore(bucket="bucket", prefix="state", client=fake)
+    check("拉取对象数", st2.pull(dst) == 2)
+    with open(os.path.join(dst, "seen.json"), encoding="utf-8") as fh:
+        check("拉取内容与上传一致", json.load(fh)["seen"] == {"a": 1})
+
+    res = st2.push(dst)
+    check("内容未变零上传", res["uploaded"] == [] and len(res["skipped"]) == 2, str(res))
+
+    with open(os.path.join(dst, "seen.json"), "w", encoding="utf-8") as fh:
+        json.dump({"version": 2, "seen": {"a": 2}}, fh)
+    res = st2.push(dst)
+    check("只传变化的对象", res["uploaded"] == ["seen.json"], str(res))
+    check("二次上传带 If-Match", fake.puts[-1][1].get("IfMatch"))
+
+    with open(os.path.join(dst, "schedule.json"), "w", encoding="utf-8") as fh:
+        json.dump({"contests": [1]}, fh)
+    fake.fail_precondition = True
+    try:
+        st2.push(dst)
+        check("条件写冲突应抛错", False, "没有抛 StateConflict")
+    except StateConflict:
+        check("条件写冲突抛 StateConflict（不覆盖他人写入）", True)
+
+    check("未配置 bucket 时不启用", R2StateStore(bucket="", client=fake).enabled is False)
+
+    class BrokenS3(FakeS3):
+        def get_object(self, Bucket, Key):
+            raise RuntimeError("AccessDenied: no permission")
+
+    try:
+        R2StateStore(bucket="b", prefix="state", client=BrokenS3()).pull(tempfile.mkdtemp())
+        check("读不到状态应中止", False, "没有抛 StateUnavailable")
+    except StateUnavailable:
+        check("读不到状态抛 StateUnavailable（避免用陈旧状态重发）", True)
+
+    # 桶被清空：初始化标记还在、状态对象全没了 → 不能当成首次运行
+    emptied = FakeS3()
+    emptied.objects["state/_ready.json"] = (b"{}", "ready")
+    try:
+        R2StateStore(bucket="bucket", prefix="state", client=emptied).pull(tempfile.mkdtemp())
+        check("桶被清空应中止", False, "没有抛 StateUnavailable")
+    except StateUnavailable:
+        check("桶被清空时中止（不拿陈旧本地状态当基线）", True)
 
     print(f"\n结果：{PASS} 项通过，{FAIL} 项失败")
     return 1 if FAIL else 0

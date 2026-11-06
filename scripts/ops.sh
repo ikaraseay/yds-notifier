@@ -12,6 +12,7 @@
 #   bash scripts/ops.sh check         本地校验：自测 / 类型 / 测试 / 干跑
 #   bash scripts/ops.sh deploy        构建并部署 Worker
 #   bash scripts/ops.sh notify       触发 Actions（normal | check）
+#   bash scripts/ops.sh r2           状态存储（status / diff / seed / refresh / enable / pull）
 #   bash scripts/ops.sh logs          最近 Actions 运行 / 指定 run 的日志
 #   bash scripts/ops.sh login        登录 Cloudflare
 #   bash scripts/ops.sh logout       登出 Cloudflare
@@ -22,8 +23,11 @@
 set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
+PY="$PROJECT_ROOT/.venv/bin/python"
+[ -x "$PY" ] || PY="$(command -v python3 || true)"
+
 usage() {
-  sed -n '2,21p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit 0
 }
 
@@ -228,6 +232,60 @@ cmd_logs() {
 cmd_login()  { step "登录 Cloudflare"; wrangler login;  ok "登录成功"; }
 cmd_logout() { step "登出 Cloudflare"; wrangler logout; ok "已登出"; }
 
+# ─────────────────────────────────────────────────────────────────────────────
+# 状态存储（Cloudflare R2）
+# ─────────────────────────────────────────────────────────────────────────────
+r2_configured() {
+  [ "${STATE_BACKEND:-auto}" != "local" ] && [ -n "${R2_BUCKET:-}" ] \
+    && [ -n "${R2_ACCOUNT_ID:-}" ] && [ -n "${R2_ACCESS_KEY_ID:-}" ] \
+    && [ -n "${R2_SECRET_ACCESS_KEY:-}" ]
+}
+
+# 一行摘要，给 status 用
+r2_summary() {
+  if r2_configured; then
+    printf 'R2 %s/%s' "$R2_BUCKET" "${R2_PREFIX:-state}"
+  elif [ "${STATE_BACKEND:-auto}" = "local" ]; then
+    printf '本地文件 + git 回写（STATE_BACKEND=local）'
+  else
+    printf '本地文件 + git 回写'
+  fi
+}
+
+cmd_r2() {
+  local sub="${1:-status}"
+  shift || true
+  case "$sub" in
+    status|check)
+      load_config
+      step "R2 状态"
+      "$PY" "$SCRIPTS_DIR/r2_state.py" check ;;
+    diff)
+      load_config
+      step "本地 ↔ R2 比对"
+      "$PY" "$SCRIPTS_DIR/r2_state.py" diff "$@" ;;
+    seed)
+      load_config
+      step "建立远端基线"
+      "$PY" "$SCRIPTS_DIR/r2_state.py" seed "$@" ;;
+    pull)
+      load_config
+      step "从 R2 回拉"
+      "$PY" "$SCRIPTS_DIR/r2_state.py" pull "$@" ;;
+    refresh)
+      # 代码还没上线、CI 仍在写 git 时，远端基线会落后 —— 发布前对齐一次
+      load_config
+      step "对齐基线到最新已发布状态"
+      bash "$SCRIPTS_DIR/r2-enable.sh" --refresh --no-secrets ;;
+    enable)
+      load_config
+      step "启用 R2 状态存储"
+      bash "$SCRIPTS_DIR/r2-enable.sh" "$@" ;;
+    *)
+      die "未知子命令：${sub}（可用 status / diff / seed / pull / refresh / enable）" ;;
+  esac
+}
+
 cmd_status() {
   load_config
   local base
@@ -238,6 +296,7 @@ cmd_status() {
   printf "  %-20s %s\n" "发件人" "${MAIL_FROM_NAME:-研电赛通知} <${MAIL_FROM_ADDRESS:-未配置}>"
   printf "  %-20s %s\n" "站长邮箱" "${MAIL_TO:-未配置}"
   printf "  %-20s %s\n" "仓库" "$REPO"
+  printf "  %-20s %s\n" "状态存储" "$(r2_summary)"
   printf "  %-20s %s\n" "IP 限流" "${MAX_PER_IP_HOUR:-10} 次/小时"
 
   step "线上"
@@ -327,6 +386,25 @@ cmd_doctor() {
     mark_warn "gh 未登录：gh auth login --web --scopes 'repo,workflow'"
   fi
 
+  step "状态存储"
+  if r2_configured; then
+    local r2out r2diff
+    if r2out="$("$PY" "$SCRIPTS_DIR/r2_state.py" check 2>&1)"; then
+      mark_ok "R2 可用：${R2_BUCKET}/${R2_PREFIX:-state}，$(printf '%s' "$r2out" | sed -n 's/^远端对象  : \([0-9]*\).*/\1/p') 个对象"
+      if r2diff="$("$PY" "$SCRIPTS_DIR/r2_state.py" diff 2>&1)"; then
+        printf '%s' "$r2diff" | tail -1 | grep -q "有变化 0 / 仅本地 0" \
+          && mark_ok "本地 data/ 与远端一致" \
+          || mark_warn "本地 data/ 与远端有差异（发布前先 bash scripts/ops.sh r2 refresh）"
+      else
+        mark_warn "比对失败：$(printf '%s' "$r2diff" | tail -1)"
+      fi
+    else
+      mark_fail "R2 不可用：$(printf '%s' "$r2out" | tail -1)"
+    fi
+  else
+    mark_warn "状态走本地文件 + git 回写（bash scripts/ops.sh r2 enable 切到 R2）"
+  fi
+
   step "线上"
   local base code
   base="$(site_url)"
@@ -358,6 +436,7 @@ case "$CMD" in
   check)        cmd_check ;;
   deploy)       cmd_deploy ;;
   notify)       cmd_notify "$@" ;;
+  r2)           cmd_r2 "$@" ;;
   logs)         cmd_logs "$@" ;;
   login)        cmd_login ;;
   logout)       cmd_logout ;;
