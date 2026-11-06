@@ -330,6 +330,8 @@ AI 只在 **GitHub Actions 的 Python 端**运行，Cloudflare Worker 不调用�
 
 ```yaml
 max_age_days: 540            # 超过该天数的「新条目」只归档、不推送
+catchup_threshold: 15        # 单轮新增超过该数 → 进入追赶模式
+catchup_size: 8              # 追赶模式只推最近 N 条，其余静默归档
 
 schedule:
   enabled: true
