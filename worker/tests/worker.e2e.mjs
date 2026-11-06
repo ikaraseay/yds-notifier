@@ -480,7 +480,7 @@ const check = (name, cond, extra = "") => {
   r = await call("/");
   check("nosniff", r.headers.get("x-content-type-options") === "nosniff");
   check("Referrer-Policy", r.headers.get("referrer-policy") === "no-referrer");
-  check("Cache-Control no-store", r.headers.get("cache-control") === "no-store");
+  check("Cache-Control 不缓存且不许改写", /no-store/.test(r.headers.get("cache-control") || "") && /no-transform/.test(r.headers.get("cache-control") || ""));
   r = await call("/nope");
   check("未知路径 404", r.status === 404);
   r = await call("/api/count");
@@ -1230,6 +1230,12 @@ const check = (name, cond, extra = "") => {
   check("页脚有错误报告入口", r.text.includes("github.com/ikaraseay/yds-notifier/issues/new"));
   check("页脚标注非官方", r.text.includes("非官方项目"));
   check("页脚出现在归档页", (await call("/archive")).text.includes("foot-links"));
+
+  // 中间层改写响应体会往页面里塞第三方脚本：有 nonce 的页面被放行（偷偷装统计），
+  // 没 nonce 的页面被 CSP 拦下（控制台多两条 blocked）。两种都不要。
+  r = await call("/archive");
+  check("HTML 声明 no-transform", (r.headers.get("cache-control") || "").includes("no-transform"), r.headers.get("cache-control"));
+  check("首页同样 no-transform", ((await call("/")).headers.get("cache-control") || "").includes("no-transform"));
 
   // 发件人显示名必须在代码里强制带 [非官方]：配置漏填也不该丢
   const mailCountBefore = sent.length;
