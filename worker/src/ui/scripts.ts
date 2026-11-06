@@ -47,14 +47,17 @@ export const LOGIN_SCRIPT = `
 })();
 `;
 
-/** 控制台：栏目 / 频率 / 暂停即时保存，确认邮件重发，退出与注销 */
+/** 控制台：角色 / 赛事 / 栏目 / 频率 / 暂停即时保存，确认邮件重发，退出与注销 */
 export const PREFS_SCRIPT = `
 (function () {
-  var form = document.getElementById('opts');
+  var settings = document.getElementById('settings');
   var msg = document.getElementById('msg');
-  if (!form) return;
+  if (!settings || !msg) return;
   var freq = document.getElementById('frequency');
   var pause = document.getElementById('pausedUntil');
+  var catBoxes = settings.querySelectorAll('#opts input[type=checkbox]');
+  var audBoxes = settings.querySelectorAll('#aud-opts input[type=checkbox]');
+  var contestBoxes = settings.querySelectorAll('#contest-opts input[type=checkbox]');
 
   function feedback(kind, text) {
     msg.className = '';
@@ -63,12 +66,26 @@ export const PREFS_SCRIPT = `
     msg.className = 'alert ' + kind;
     msg.textContent = text;
   }
+  function syncLabel(el) {
+    var label = el.closest('.opt');
+    if (label) label.classList.toggle('is-on', el.checked);
+  }
   function collect() {
     var out = {};
-    form.querySelectorAll('input[type=checkbox]').forEach(function (el) {
+    catBoxes.forEach(function (el) {
       out[el.name] = el.checked;
-      var label = el.closest('.opt');
-      if (label) label.classList.toggle('is-on', el.checked);
+      syncLabel(el);
+    });
+    var aud = {};
+    audBoxes.forEach(function (el) {
+      aud[el.dataset.aud] = el.checked;
+      syncLabel(el);
+    });
+    out.audiences = aud;
+    out.contests = Array.prototype.filter.call(contestBoxes, function (el) {
+      return el.checked;
+    }).map(function (el) {
+      return el.value;
     });
     if (freq) out.frequency = freq.value;
     if (pause) out.pausedUntil = pause.value || '';
@@ -88,9 +105,20 @@ export const PREFS_SCRIPT = `
     });
   }
 
-  form.addEventListener('change', save);
+  settings.addEventListener('change', save);
   if (freq) freq.addEventListener('change', save);
   if (pause) pause.addEventListener('change', save);
+
+  document.querySelectorAll('[data-contest-preset]').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+      var mode = btn.getAttribute('data-contest-preset');
+      contestBoxes.forEach(function (el) {
+        el.checked = mode === 'all' ? true : mode === 'core' ? el.value === '电子设计竞赛' : false;
+        syncLabel(el);
+      });
+      save();
+    });
+  });
 
   var clearPause = document.getElementById('clearPause');
   if (clearPause && pause) clearPause.addEventListener('click', function () {

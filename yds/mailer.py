@@ -17,7 +17,7 @@ import html
 import logging
 from datetime import datetime
 from typing import List, Optional, Sequence
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 from .models import Notice
 from .personas import AUDIENCE_NAMES, AUDIENCES, primary_audience
@@ -176,6 +176,121 @@ def _persona_block(notices: Sequence[Notice]) -> str:
     </td></tr>"""
 
 
+def _contest_groups(notices: Sequence[Notice]) -> List[tuple[str, List[Notice]]]:
+    """按赛事分组；组内保持重要度排序，组间按最高权重排序。"""
+    groups: dict = {}
+    for n in notices:
+        groups.setdefault(n.contest or "综合通知", []).append(n)
+    return sorted(
+        groups.items(),
+        key=lambda kv: max(x.weight for x in kv[1]),
+        reverse=True,
+    )
+
+
+def _contest_query(name: str, persona: str = "") -> str:
+    q = f"?contest={quote(name)}"
+    if persona:
+        q += f"&audience={quote(persona)}"
+    return q
+
+
+def _next_event(ns: Sequence[Notice]) -> str:
+    from datetime import date as _date
+
+    today = _date.today().isoformat()
+    days = sorted(d for n in ns for d in n.event_dates if d >= today)
+    if not days:
+        days = sorted(d for n in ns for d in n.event_dates)
+    return days[0] if days else ""
+
+
+def _contest_overview(
+    notices: Sequence[Notice], calendar_url: str, archive_url: str, persona: str = ""
+) -> str:
+    """顶部「按赛事汇总」：每项赛事的条数、最近时间节点、日历与归档链接。"""
+    rows = []
+    for name, ns in _contest_groups(notices)[:8]:
+        next_day = _next_event(ns)
+        q = _contest_query(name, persona)
+        links = []
+        if calendar_url:
+            links.append(
+                f'<a href="{_esc(_safe_url(calendar_url + q))}" style="color:#4D96FF;'
+                f'text-decoration:none;font-weight:700;">日历</a>'
+            )
+        if archive_url:
+            links.append(
+                f'<a href="{_esc(_safe_url(archive_url + q))}" style="color:#4D96FF;'
+                f'text-decoration:none;font-weight:700;">列表</a>'
+            )
+        next_html = (
+            f'<span style="color:#8a90a2;"> · 最近 {_esc(next_day)}</span>'
+            if next_day else ""
+        )
+        link_html = "　" + " · ".join(links) if links else ""
+        rows.append(
+            f'<tr><td style="padding:7px 0;border-top:1px dashed #d8cfc0;font-size:12px;'
+            f'line-height:18px;color:#2b2f3d;">'
+            f'<b>{_esc(name)}</b>'
+            f'<span style="color:#b8bccb;">&nbsp;{len(ns)} 条</span>'
+            f'{next_html}'
+            f'{link_html}</td></tr>'
+        )
+    if not rows:
+        return ""
+    return f"""
+    <tr><td style="padding:14px 0 0;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"
+             style="background:#ffffff;border:3px solid #2E2A33;border-radius:8px;">
+        <tr><td style="padding:15px 18px 12px;">
+          <div style="font-size:12px;color:#8a90a2;letter-spacing:1px;font-weight:700;">
+            按赛事汇总 · 点击订阅单个赛事日历</div>
+          <table role="presentation" width="100%" cellpadding="0" cellspacing="0">
+            {''.join(rows)}
+          </table>
+        </td></tr>
+      </table>
+    </td></tr>"""
+
+
+def _contest_sections(
+    notices: Sequence[Notice], calendar_url: str, archive_url: str, persona: str = ""
+) -> str:
+    """角色版邮件：一个赛事一个区块，区块头带该赛事的日历 / 归档链接。"""
+    out: List[str] = []
+    for name, ns in _contest_groups(notices):
+        q = _contest_query(name, persona)
+        links = []
+        if calendar_url:
+            links.append(
+                f'<a href="{_esc(_safe_url(calendar_url + q))}" style="font-size:11px;'
+                f'color:#4D96FF;text-decoration:none;font-weight:700;">赛事日历</a>'
+            )
+        if archive_url:
+            links.append(
+                f'<a href="{_esc(_safe_url(archive_url + q))}" style="font-size:11px;'
+                f'color:#4D96FF;text-decoration:none;font-weight:700;">赛事列表</a>'
+            )
+        cards = "".join(_notice_card(n) for n in ns)
+        out.append(
+            f"""
+    <tr><td style="padding:22px 0 12px;">
+      <table role="presentation" width="100%" cellpadding="0" cellspacing="0"><tr>
+        <td style="font-size:15px;font-weight:800;color:#2b2f3d;">
+          <span style="display:inline-block;width:12px;height:12px;border-radius:3px;
+                 background:#FF6B6B;margin-right:8px;vertical-align:middle;
+                 border:2px solid #2E2A33;"></span>{_esc(name)}
+          <span style="color:#b8bccb;font-weight:400;font-size:13px;">&nbsp;{len(ns)}</span>
+        </td>
+        <td align="right" style="white-space:nowrap;">{' · '.join(links)}</td>
+      </tr></table>
+    </td></tr>
+    {cards}"""
+        )
+    return "".join(out)
+
+
 def _notice_card(n: Notice, compact: bool = False) -> str:
     color, soft = CATEGORY_STYLE.get(n.category, ("#7B9EF8", "#EEF3FF"))
     is_soft = any(k in n.title for k in SOFT_BADGE)
@@ -315,6 +430,8 @@ def build_html(
     issue_url: str = "",
     compact_low: bool = False,
     persona: str = "",
+    calendar_url: str = "",
+    archive_url: str = "",
 ) -> str:
     groups = {c: [] for c in CATEGORY_ORDER}
     for n in notices:
@@ -355,6 +472,12 @@ def build_html(
     now = datetime.now()
     greet = _greeting(now)
     count = len(notices)
+    # 综合版按栏目分组；角色版按赛事分组，并在顶部给出「按赛事汇总 + 赛事日历入口」
+    content_blocks = (
+        _contest_sections(notices, calendar_url, archive_url, persona)
+        if persona else "".join(blocks)
+    )
+    overview = _contest_overview(notices, calendar_url, archive_url, persona)
     count_label = (
         "条通知有更新，已为你重新整理" if any(n.change_kind == "changed" for n in notices)
         else "条新通知，已为你整理如下"
@@ -412,7 +535,9 @@ def build_html(
 
   {'' if persona else _persona_block(notices)}
 
-  {''.join(blocks)}
+  {overview}
+
+  {content_blocks}
 
   {unsub_block}
 

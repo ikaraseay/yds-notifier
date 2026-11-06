@@ -18,7 +18,7 @@ import logging
 import re
 from dataclasses import dataclass
 from datetime import date
-from typing import Dict, FrozenSet, List, Optional
+from typing import Dict, FrozenSet, List, Optional, Sequence
 
 import requests
 
@@ -52,6 +52,7 @@ class Recipient:
     frequency: str = "instant"   # instant | daily | weekly
     paused_until: str = ""       # YYYY-MM-DD，含当天
     audiences: Optional[FrozenSet[str]] = None
+    contests: Optional[FrozenSet[str]] = None   # None = 全部赛事
     label: str = ""              # 人物角色备注，仅用于日志
 
     def wants(self, category: str) -> bool:
@@ -62,12 +63,16 @@ class Recipient:
         return bool(key) and key in self.categories
 
     def wants_notice(self, notice) -> bool:
-        """栏目偏好 + 人员视角双重过滤。"""
+        """栏目偏好 + 人员视角 + 关注赛事三重过滤。"""
         if not self.wants(notice.category):
             return False
-        if self.audiences is None:
-            return True
-        return bool(self.audiences & set(notice.audiences or []))
+        if self.audiences is not None and not (self.audiences & set(notice.audiences or [])):
+            return False
+        # 赛事为空的是全站级通知（赛程一览、年度启动等），不因赛事筛选被丢掉
+        contest = getattr(notice, "contest", "") or ""
+        if self.contests is not None and contest and contest not in self.contests:
+            return False
+        return True
 
     def is_paused(self, today: date | None = None) -> bool:
         if not self.paused_until:
@@ -104,6 +109,37 @@ def _parse_prefs(raw) -> Optional[FrozenSet[str]]:
     if not isinstance(raw, dict):
         return None
     return frozenset(k for k in ALL_CATEGORIES if raw.get(k) is True)
+
+
+def _parse_audiences(item: dict) -> Optional[FrozenSet[str]]:
+    """角色开关：兼容数组（新接口）与对象（prefs.audiences）两种形态。
+
+    字段存在但全部为 false 时返回空集合 —— 表示用户明确不想收任何角色，
+    与字段缺失（None = 不限制）区分开。
+    """
+    prefs = item.get("prefs") if isinstance(item.get("prefs"), dict) else {}
+    raw = item.get("audiences")
+    if raw is None and "audiences" in prefs:
+        raw = prefs.get("audiences")
+    if raw is None:
+        return None
+    if isinstance(raw, dict):
+        return frozenset(k for k, v in raw.items() if v is True and k in ALL_AUDIENCES)
+    if isinstance(raw, list):
+        return frozenset(a for a in raw if a in ALL_AUDIENCES)
+    return None
+
+
+def _parse_contests(item: dict) -> Optional[FrozenSet[str]]:
+    """关注赛事：空数组 = 全部赛事（返回 None 表示不做限制）。"""
+    prefs = item.get("prefs") if isinstance(item.get("prefs"), dict) else {}
+    raw = item.get("contests")
+    if raw is None and "contests" in prefs:
+        raw = prefs.get("contests")
+    if not isinstance(raw, list):
+        return None
+    picked = frozenset(str(c).strip() for c in raw if str(c).strip())
+    return picked or None
 
 
 def fetch_subscribers(
@@ -156,17 +192,13 @@ def fetch_subscribers(
             paused = str(item.get("pausedUntil") or "")
             if paused and not re.fullmatch(r"\d{4}-\d{2}-\d{2}", paused):
                 paused = ""
-            raw_aud = item.get("audiences")
-            audiences = None
-            if isinstance(raw_aud, list):
-                picked = frozenset(a for a in raw_aud if a in ALL_AUDIENCES)
-                audiences = picked or None
             out.append(Recipient(
                 email=email,
                 categories=_parse_prefs(item.get("prefs")),
                 frequency=freq,
                 paused_until=paused,
-                audiences=audiences,
+                audiences=_parse_audiences(item),
+                contests=_parse_contests(item),
             ))
     else:
         # 旧版：只有邮箱列表，按不限栏目处理
@@ -211,10 +243,16 @@ def resolve_recipients(
             if e in seen or not _valid(e):
                 continue
             seen.add(e)
+            raw_contests = p.get("contests")
+            contests = (
+                frozenset(str(c) for c in raw_contests if str(c).strip())
+                if isinstance(raw_contests, list) and raw_contests else None
+            )
             ordered.append(Recipient(
                 email=e,
                 categories=None,
                 audiences=frozenset({key}),
+                contests=contests,
                 label=str(p.get("name") or key),
             ))
 
@@ -225,3 +263,17 @@ def resolve_recipients(
         ordered.append(r)
 
     return ordered
+
+
+def watched_contests(recipients: Sequence[Recipient]) -> Optional[FrozenSet[str]]:
+    """所有收件人关注的赛事并集。
+
+    任一收件人不限制赛事（None）时返回 None，表示「可能关心全部」，
+    调用方据此决定是否轮询所有赛事专区。
+    """
+    union = set()
+    for r in recipients:
+        if r.contests is None:
+            return None
+        union |= set(r.contests)
+    return frozenset(union)

@@ -361,18 +361,39 @@ function archiveItem(n: Notice): string {
   </div>`;
 }
 
-export async function handleArchive(env: Env): Promise<Response> {
+/** 按 URL 查询参数过滤：?contest=赛事名&audience=角色。 */
+function filterByUrl<T extends { contest?: string; audiences?: string[] }>(items: T[], url: URL): T[] {
+  const contest = (url.searchParams.get('contest') || '').trim();
+  const audience = (url.searchParams.get('audience') || '').trim();
+  if (!contest && !audience) return items;
+  return items.filter((n) => {
+    if (contest && n.contest !== contest) return false;
+    if (audience && !(n.audiences || []).includes(audience)) return false;
+    return true;
+  });
+}
+
+export async function handleArchive(req: Request, env: Env): Promise<Response> {
+  const url = new URL(req.url);
   try {
-    const notices = sorted(await loadNotices(env)).slice(0, 200);
-    const nav = `<p class="sub">这里收录最近推送过的通知，错过邮件也能查到</p>
+    const notices = filterByUrl(sorted(await loadNotices(env)), url).slice(0, 200);
+    const contest = (url.searchParams.get('contest') || '').trim();
+    const audience = (url.searchParams.get('audience') || '').trim();
+    const scope = [contest, audience && (AUDIENCE_LABELS[audience] || audience)]
+      .filter(Boolean)
+      .map(esc)
+      .join(' · ');
+    const nav = `<p class="sub">这里收录最近推送过的通知，错过邮件也能查到${
+      scope ? `（当前筛选：${scope}）` : ''
+    }</p>
 <p class="tip">
   <a href="/feed.xml">RSS 订阅（/feed.xml）</a> ·
   <a href="/calendar.ics">日历订阅（/calendar.ics）</a> ·
-  <a href="/">返回首页</a>
+  ${scope ? '<a href="/archive">查看全部</a> · ' : ''}<a href="/">返回首页</a>
 </p>`;
     const list = notices.length
       ? notices.map(archiveItem).join('')
-      : '<p class="sub">暂时还没有收录通知，过段时间再来看看吧。</p>';
+      : '<p class="sub">没有符合筛选条件的通知。</p>';
     return page({ title: '通知归档', heading: '通知归档', body: `${nav}${list}` });
   } catch {
     return page({ title: '通知归档', heading: '通知归档', body: '<p class="sub">归档暂时无法加载，请稍后再试。</p>' }, 500);
@@ -490,14 +511,23 @@ function scheduleEntries(s: ContestSchedule): Array<{ date: string; label: strin
   ];
 }
 
-export async function handleCalendar(env: Env): Promise<Response> {
+export async function handleCalendar(req: Request, env: Env): Promise<Response> {
+  const url = new URL(req.url);
   const headers = cacheableHeaders('text/calendar;charset=utf-8', {
     'Content-Disposition': 'inline; filename="yds-notices.ics"',
   });
   try {
     const cfg = getConfig(env);
-    const notices = await loadNotices(env);
-    const schedule = await loadSchedule(env);
+    const notices = filterByUrl(await loadNotices(env), url);
+    const scopedContest = (url.searchParams.get('contest') || '').trim();
+    const scopedAudience = (url.searchParams.get('audience') || '').trim();
+    // 赛程是赛事级数据，没有角色属性：只按赛事过滤，避免角色链接把赛程全丢掉
+    const schedule = (await loadSchedule(env)).filter(
+      (s) => !scopedContest || s.contest === scopedContest,
+    );
+    const calName = `${cfg.siteName}日历${scopedContest ? ` · ${scopedContest}` : ''}${
+      scopedAudience ? ` · ${AUDIENCE_LABELS[scopedAudience] || scopedAudience}` : ''
+    }`;
     const stamp = utcStamp(new Date());
     const host = hostOf(cfg.baseUrl);
     const seenUid = new Set<string>();
@@ -507,7 +537,7 @@ export async function handleCalendar(env: Env): Promise<Response> {
       'PRODID:-//yds-notifier//Notice Calendar//ZH',
       'CALSCALE:GREGORIAN',
       'METHOD:PUBLISH',
-      `X-WR-CALNAME:${icalEsc(`${cfg.siteName}日历`)}`,
+      `X-WR-CALNAME:${icalEsc(calName)}`,
       'X-WR-TIMEZONE:Asia/Shanghai',
     ];
 

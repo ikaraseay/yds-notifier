@@ -55,7 +55,7 @@ export default {
       // ---- 公开内容：归档 / RSS / 日历 ----------------------------------
       if (p === "/archive") {
         if (m !== "GET") return methodNotAllowed("GET");
-        return handleArchive(env);
+        return handleArchive(req, env);
       }
       if (p === "/feed.xml") {
         if (m !== "GET") return methodNotAllowed("GET");
@@ -63,7 +63,7 @@ export default {
       }
       if (p === "/calendar.ics") {
         if (m !== "GET" && m !== "HEAD") return methodNotAllowed("GET, HEAD");
-        return handleCalendar(env);
+        return handleCalendar(req, env);
       }
 
       // ---- 管理接口 ------------------------------------------------------

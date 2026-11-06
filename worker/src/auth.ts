@@ -24,6 +24,51 @@ export const CATEGORIES = [
 
 export type CategoryKey = (typeof CATEGORIES)[number]["key"];
 
+/**
+ * 人员视角：与 yds/personas.py 的 AUDIENCES 一一对应。
+ * 订阅者勾选自己的角色，Actions 发信时按 notice.audiences 过滤。
+ */
+export const AUDIENCES = [
+  { key: "student", label: "参赛学生", desc: "报名、赛题、提交作品、答辩、获奖、报销" },
+  { key: "advisor", label: "指导教师", desc: "组队与指导、评审安排、决赛行程、证书" },
+  { key: "admin", label: "培养单位", desc: "资格审核、缴费统计、获奖名单、承办申报" },
+  { key: "organizer", label: "分赛区 / 承办方", desc: "分赛区资讯、承办征集、赛程协调" },
+] as const;
+
+export type AudienceKey = (typeof AUDIENCES)[number]["key"];
+
+/**
+ * 主题赛事清单。**必须与 yds/personas.py 的 CONTESTS 完全一致**，
+ * yds/selftest.py 会解析本文件并逐项比对，改这里要同时改那边。
+ *
+ * <contests>
+ */
+export const CONTESTS = [
+  "智慧城市技术与创意设计大赛",
+  "未来飞行器创新大赛",
+  "数学建模竞赛",
+  "电子设计竞赛",
+  "创“芯”大赛",
+  "EDA精英挑战赛",
+  "人工智能创新大赛",
+  "机器人创新设计大赛",
+  "能源装备创新设计大赛",
+  "公共管理案例大赛",
+  "乡村振兴科技强农+创新大赛",
+  "网络安全创新大赛",
+  "“双碳”创新与创意大赛",
+  "金融科技创新大赛",
+  "“美丽中国”创新设计大赛",
+  "企业管理创新大赛",
+  "操作系统开源创新大赛",
+  "“文化中国”两创大赛",
+  "国际中文教育案例大赛",
+  "智能建造创新大赛",
+];
+// </contests>
+
+export const DEFAULT_CONTEST = "电子设计竞赛";
+
 export type Frequency = "instant" | "daily" | "weekly";
 export type SubStatus = "pending" | "confirmed";
 
@@ -32,6 +77,10 @@ export interface Prefs {
   review: boolean;
   final: boolean;
   updates: boolean;
+  /** 人员视角开关：只收命中角色的通知 */
+  audiences: Record<AudienceKey, boolean>;
+  /** 关注的赛事；空数组表示不限（收全部赛事） */
+  contests: string[];
   frequency: Frequency;
   pausedUntil: string; // YYYY-MM-DD，含当天；空串表示不暂停
 }
@@ -41,6 +90,10 @@ export const DEFAULT_PREFS: Prefs = {
   review: true,
   final: true,
   updates: false, // 动态里多是花絮，默认关掉，避免打扰
+  // 老用户默认全开，保持升级前的收信范围；可自行收窄
+  audiences: { student: true, advisor: true, admin: true, organizer: true },
+  // 默认只看研电赛，用户可在控制台添加其他赛事
+  contests: [DEFAULT_CONTEST],
   frequency: "instant",
   pausedUntil: "",
 };
@@ -79,12 +132,36 @@ export function normalizePausedUntil(raw: unknown): string {
   return /^\d{4}-\d{2}-\d{2}$/.test(s) ? s : "";
 }
 
+export function normalizeAudiences(raw: unknown): Record<AudienceKey, boolean> {
+  const out = { ...DEFAULT_PREFS.audiences };
+  if (Array.isArray(raw)) {
+    const set = new Set(raw.map((v) => String(v)));
+    for (const a of AUDIENCES) out[a.key] = set.has(a.key);
+    return out;
+  }
+  if (raw && typeof raw === "object") {
+    const o = raw as Record<string, unknown>;
+    for (const a of AUDIENCES) {
+      if (typeof o[a.key] === "boolean") out[a.key] = o[a.key] as boolean;
+    }
+  }
+  return out;
+}
+
+export function normalizeContests(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [...DEFAULT_PREFS.contests];
+  const picked = raw.filter((v): v is string => typeof v === "string" && CONTESTS.includes(v));
+  return [...new Set(picked)];
+}
+
 export function normalizePrefs(raw: unknown): Prefs {
   const p = (raw || {}) as Partial<Prefs>;
   const out = { ...DEFAULT_PREFS };
   for (const c of CATEGORIES) {
     if (typeof p[c.key] === "boolean") out[c.key] = p[c.key] as boolean;
   }
+  out.audiences = normalizeAudiences(p.audiences);
+  out.contests = normalizeContests(p.contests);
   out.frequency = normalizeFrequency(p.frequency);
   out.pausedUntil = normalizePausedUntil(p.pausedUntil);
   return out;
@@ -97,6 +174,8 @@ export function prefsFromBody(body: unknown, current: Prefs): Prefs {
   for (const c of CATEGORIES) {
     if (typeof raw[c.key] === "boolean") out[c.key] = raw[c.key] as boolean;
   }
+  if (raw.audiences !== undefined) out.audiences = normalizeAudiences(raw.audiences);
+  if (raw.contests !== undefined) out.contests = normalizeContests(raw.contests);
   if (typeof raw.frequency === "string") out.frequency = normalizeFrequency(raw.frequency);
   if (typeof raw.pausedUntil === "string") out.pausedUntil = normalizePausedUntil(raw.pausedUntil);
   return out;

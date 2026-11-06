@@ -10,6 +10,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import os
 import re
@@ -35,7 +36,8 @@ from .publish import (
     payload_fingerprint,
     publish_notices,
 )
-from .recipients import resolve_recipients, split_recipients
+from .personas import CONTEST_IDS
+from .recipients import resolve_recipients, split_recipients, watched_contests
 from .senders import build_client
 from .schedule import (
     ReminderLog,
@@ -56,6 +58,24 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 def load_config(path: str) -> dict:
     with open(path, encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
+
+
+def _load_zone_offset(path: str) -> int:
+    try:
+        with open(path, encoding="utf-8") as fh:
+            raw = json.load(fh)
+        return max(0, int(raw.get("offset") or 0))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return 0
+
+
+def _save_zone_offset(path: str, offset: int) -> None:
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump({"version": 1, "offset": offset}, fh, ensure_ascii=False)
+        fh.write("\n")
+    os.replace(tmp, path)
 
 
 def collect(sources: List[BaseSource], enrich: bool = True) -> List[Notice]:
@@ -130,10 +150,6 @@ def main(argv: List[str] | None = None) -> int:
     cfg = load_config(args.config)
     if args.max_notify:
         cfg["max_notify"] = args.max_notify
-    sources = build_sources(cfg)
-    if not sources:
-        log.error("没有启用任何数据源，请检查 %s", args.config)
-        return 2
 
     sender = build_client(cfg.get("mail") or {})
     static_to = args.to or settings.mail_to
@@ -145,6 +161,30 @@ def main(argv: List[str] | None = None) -> int:
         fallback_url=fallback_list_url,
         personas=cfg.get("personas") or [],
     )
+
+    # 赛事专区抓取范围 = 所有订阅者关注赛事的并集；没人限制时按 per_run 轮询。
+    watched = watched_contests(recipients)
+    zone_cfg = next(
+        (s for s in (cfg.get("sources") or []) if s.get("key") == "cpipc_zones" and s.get("enabled", True)),
+        {},
+    )
+    zone_all = [str(c) for c in (zone_cfg.get("contests") or []) if CONTEST_IDS.get(str(c))]
+    zone_per_run = max(1, int(zone_cfg.get("per_run", 4)))
+    zone_state_path = os.path.join(ROOT, "data/zones.json")
+    zone_offset = _load_zone_offset(zone_state_path) % len(zone_all) if zone_all else 0
+
+    def make_sources():
+        return build_sources(cfg, only_contests=watched, zone_offset=zone_offset)
+
+    sources = make_sources()
+    if not sources:
+        log.error("没有启用任何数据源，请检查 %s", args.config)
+        return 2
+    if zone_cfg:
+        if watched is None:
+            log.info("赛事专区：无人限制赛事，按每轮 %s 项轮询（共 %s 项）", zone_per_run, len(zone_all))
+        else:
+            log.info("赛事专区：只抓订阅者关注的 %s 项赛事", len(watched or []))
     needs_send = not (args.check or args.preview)
     if needs_send:
         if not recipients:
@@ -159,6 +199,12 @@ def main(argv: List[str] | None = None) -> int:
     log.info("开始探测，共 %s 个数据源", len(sources))
     meta = collect_meta(sources)
     log.info("列表页共 %s 条", len(meta))
+    # 无人限制赛事时推进专区分片游标，保证几轮之后 19 项赛事都被扫过
+    if zone_cfg and watched is None and zone_all:
+        next_offset = (zone_offset + zone_per_run) % len(zone_all)
+        if not (args.check or args.preview or args.dry_run):
+            _save_zone_offset(zone_state_path, next_offset)
+        log.info("赛事专区游标 %s → %s（下一轮从该位置继续）", zone_offset, next_offset)
     if not meta:
         # 官网改版 / 全站不可达时必须让 CI 变红，不能伪装成「无新公告」
         log.error("列表页 0 条：疑似官网改版或抓取全部失败，请检查数据源与解析器")
@@ -205,9 +251,9 @@ def main(argv: List[str] | None = None) -> int:
 
     changed_uids = set()
     candidates: List[Notice] = []
-    # 扩充数据源后，历史文件（2024/2025 年度报告等）会被当成「新条目」。
-    # 超过 max_age_days 的只归档、不推送，避免首次升级群发陈年旧文。
-    max_age = max(30, int(cfg.get("max_age_days", 540)))
+    # 扩充数据源后，专区里的上年旧通知会被当成「新条目」。
+    # 超过 push_max_age_days 的只归档、不推送，避免首次升级群发陈年旧文。
+    max_age = max(7, int(cfg.get("push_max_age_days", cfg.get("max_age_days", 60))))
     cutoff = today_date - timedelta(days=max_age)
     stale_skipped = 0
     for n in meta:
@@ -241,7 +287,7 @@ def main(argv: List[str] | None = None) -> int:
     detailed: List[Notice] = []
     if wanted:
         log.info("开始抓详情：候选 %s 条 + 抽检 %s 条", len(candidates), len(check_uids))
-        detailed = collect(enrich_only(build_sources(cfg), wanted))
+        detailed = collect(enrich_only(make_sources(), wanted))
     detail_by_uid = {n.uid: n for n in detailed}
 
     merged: Dict[str, Notice] = {}

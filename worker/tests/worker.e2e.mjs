@@ -844,5 +844,96 @@ const check = (name, cond, extra = "") => {
   check("VALARM 结构完整", (ics3.match(/BEGIN:VALARM/g) || []).length
     === (ics3.match(/END:VALARM/g) || []).length);
 
+  console.log("\n[33] 角色与赛事偏好");
+
+  // 前面的用例已登出并注销了原账号，这里造一个独立的已确认订阅者
+  const pEmail = "persona@qq.com";
+  const nowIso = new Date().toISOString();
+  await env.SUBS.put(
+    `user:${pEmail}`,
+    JSON.stringify({ email: pEmail, createdAt: nowIso, lastLogin: nowIso, status: "confirmed" }),
+  );
+  await env.SUBS.put(
+    `sub:${pEmail}`,
+    JSON.stringify({ email: pEmail, createdAt: nowIso, status: "confirmed" }),
+  );
+
+  const freshSid = "f".repeat(64);
+  const sidDigest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(freshSid));
+  const sidHash = [...new Uint8Array(sidDigest)].map((b) => b.toString(16).padStart(2, "0")).join("");
+  await env.SUBS.put(
+    `session:${sidHash}`,
+    JSON.stringify({ email: pEmail, exp: Date.now() + 3600_000 }),
+    { expirationTtl: 3600 },
+  );
+
+  r = await call("/api/prefs", {
+    method: "POST",
+    body: JSON.stringify({
+      audiences: { student: true, advisor: true, admin: false, organizer: false },
+      contests: ["电子设计竞赛", "人工智能创新大赛"],
+      frequency: "daily",
+    }),
+    headers: { Cookie: `yds_sid=${freshSid}` },
+  });
+  const pj3 = JSON.parse(r.text);
+  check("角色偏好保存 200", r.status === 200, r.text);
+  check("管理员角色已关", pj3.prefs.audiences.admin === false && pj3.prefs.audiences.student === true);
+  check("赛事列表已保存", pj3.prefs.contests.length === 2 && pj3.prefs.contests.includes("人工智能创新大赛"));
+  const saved3 = JSON.parse(await env.SUBS.get("user:" + pEmail));
+  check("角色落 KV", saved3.prefs.audiences.advisor === true && saved3.prefs.audiences.organizer === false);
+  check("赛事落 KV", saved3.prefs.contests.includes("电子设计竞赛"));
+
+  r = await call("/api/prefs", {
+    method: "POST",
+    body: JSON.stringify({ audiences: ["student"], contests: ["不存在的比赛", "电子设计竞赛"] }),
+    headers: { Cookie: `yds_sid=${freshSid}` },
+  });
+  const pj4 = JSON.parse(r.text);
+  check("数组形态角色被接受", pj4.prefs.audiences.student === true
+    && pj4.prefs.audiences.admin === false, JSON.stringify(pj4.prefs.audiences));
+  check("非法赛事被过滤", pj4.prefs.contests.length === 1
+    && pj4.prefs.contests[0] === "电子设计竞赛", JSON.stringify(pj4.prefs.contests));
+
+  // 恢复角色设置，避免影响后续日历 / 归档过滤断言
+  await call("/api/prefs", {
+    method: "POST",
+    body: JSON.stringify({
+      audiences: { student: true, advisor: true, admin: true, organizer: true },
+    }),
+    headers: { Cookie: `yds_sid=${freshSid}` },
+  });
+
+  r = await call("/", { headers: { Cookie: `yds_sid=${freshSid}` } });
+  check("控制台含「我的角色」", r.text.includes("我的角色"));
+  check("控制台含四类角色", ["参赛学生", "指导教师", "培养单位", "分赛区 / 承办方"]
+    .every((k) => r.text.includes(k)));
+  check("控制台含「关注的赛事」", r.text.includes("关注的赛事"));
+  check("控制台列出全部赛事", r.text.includes("智能建造创新大赛") && r.text.includes("数学建模竞赛"));
+  check("控制台有快捷选择", r.text.includes("只选研电赛") && r.text.includes("全选"));
+  check("赛事勾选可提交", r.text.includes('name="contest" value="电子设计竞赛"'));
+
+  r = await call("/api/list", { headers: { Authorization: "Bearer admin-secret" } });
+  const listJson3 = JSON.parse(r.text);
+  const me = (listJson3.subscribers || []).find((s) => s.email === pEmail);
+  check("/api/list 含该订阅者", !!me, r.text.slice(0, 160));
+  check("/api/list 下发角色数组", Array.isArray(me.audiences)
+    && me.audiences.includes("student") && me.audiences.includes("admin"), JSON.stringify(me.audiences));
+  check("/api/list 下发赛事数组", Array.isArray(me.contests) && me.contests.includes("电子设计竞赛"));
+
+  r = await call("/archive?contest=" + encodeURIComponent("电子设计竞赛"));
+  check("归档按赛事筛选命中", r.text.includes("关于报名截止的通知"));
+  r = await call("/archive?contest=" + encodeURIComponent("人工智能创新大赛"));
+  check("归档按赛事筛选为空", r.text.includes("没有符合筛选条件的通知"));
+  r = await call("/archive?audience=admin");
+  check("归档按角色筛选为空", r.text.includes("没有符合筛选条件的通知"));
+
+  r = await call("/calendar.ics?contest=" + encodeURIComponent("电子设计竞赛"));
+  check("日历按赛事筛选保留事件", r.text.includes("UID:p1@"));
+  r = await call("/calendar.ics?contest=" + encodeURIComponent("人工智能创新大赛"));
+  check("日历按赛事筛选排除事件", !r.text.includes("UID:p1@"));
+  r = await call("/calendar.ics?contest=" + encodeURIComponent("电子设计竞赛") + "&audience=student");
+  check("角色链接仍保留赛程", r.text.includes("【报名截止】电子设计竞赛"));
+
   console.log(`\n结果：${pass} 项通过${process.exitCode ? "，存在失败" : "，全部通过"}`);
 })();
