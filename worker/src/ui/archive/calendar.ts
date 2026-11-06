@@ -233,7 +233,7 @@ export function renderCalendar(events: CalEvent[], monthParam: string, url: URL)
     ? `本月 ${monthEvents.length} 个节点 · 覆盖 ${contests.size} 项赛事`
     : '本月暂无节点';
 
-  return `<div class="calv">
+  return `<div class="calv" id="cal">
   <div class="calh">
     <div>
       <h3>${cur.year} 年 ${cur.month} 月</h3>
@@ -252,7 +252,7 @@ export function renderCalendar(events: CalEvent[], monthParam: string, url: URL)
   </div>
 
   <div class="calev">
-    <h4>本月日程 <a class="cnav" href="#">↑ 回到月历</a></h4>
+    <h4>本月日程 <a class="cnav" href="#cal">↑ 回到月历</a></h4>
     ${renderDayGroups([...byDay.entries()].sort((a, b) => a[0].localeCompare(b[0])), monthEvents.length)}
   </div>
 </div>`;
