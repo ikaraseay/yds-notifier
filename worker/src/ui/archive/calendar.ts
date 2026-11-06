@@ -154,9 +154,9 @@ function renderCell(day: string, num: number, list: CalEvent[], today: string): 
   if (day === today) cls.push('td');
 
   const lines = list.slice(0, MAX_PER_CELL).map((e) =>
-    `<span class="cl${e.deadline ? ' dl' : ''}"><b>${esc(e.label)}</b>`
+    `<span class="cl${e.deadline ? ' dl' : ''}">`
     + (e.source ? `<em>${esc(e.source)}</em>` : '')
-    + '</span>',
+    + `<b>${esc(e.label)}</b></span>`,
   ).join('');
   const more = list.length ? `<span class="cn">${list.length}</span>` : '';
   const inner = `<span class="dn">${num}</span>${more}${lines}`;
