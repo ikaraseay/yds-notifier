@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import json
+import os
 import re
 import sys
 import tempfile
@@ -25,9 +27,11 @@ from .ai.prompts import load_examples, load_prompt, load_schema, render, user_pa
 from .ai.schema import CATEGORIES, input_hash, parse_evidence_date, validate_response
 from .config import derive_base_url, derive_internal_base, settings
 from .mailer import build_html, build_subject, build_text
+from .lock import RunLock
 from .models import Attachment, Notice
 from .personas import (
     AUDIENCES,
+    CONTEST_IDS,
     CONTESTS,
     STAGES,
     infer_audiences,
@@ -481,11 +485,20 @@ def main() -> int:
 
     print("\n[18] 后台角色 / 赛事偏好与赛事专区")
 
+    # 赛事清单已收敛到 shared/contests.json：这里验证「两端确实都读它」，
+    # 而不是像旧版那样去解析 TypeScript 源码文本比对。
+    contract = json.loads(
+        (Path(__file__).resolve().parent.parent / "shared/contests.json").read_text(encoding="utf-8")
+    )
+    names = [c["name"] for c in contract["contests"]]
+    check("赛事契约与 Python 常量一致", tuple(names) == tuple(CONTESTS),
+          f"{len(names)} vs {len(CONTESTS)}")
+    check("赛事契约无重复", len(set(names)) == len(names))
     auth_ts = (Path(__file__).resolve().parent.parent / "worker/src/auth.ts").read_text(encoding="utf-8")
-    ts_block = auth_ts.split("<contests>")[1].split("</contests>")[0]
-    ts_contests = re.findall(r'"([^"]+)"', ts_block)
-    check("Worker 赛事清单与 Python 一致", tuple(ts_contests) == tuple(CONTESTS),
-          f"{len(ts_contests)} vs {len(CONTESTS)}")
+    check("Worker 从契约文件读取赛事", "shared/contests.json" in auth_ts,
+          "auth.ts 应 import 契约，而不是自带一份清单")
+    check("赛事契约的专区 id 与 Python 映射一致",
+          {c["name"]: c["zoneId"] for c in contract["contests"]} == dict(CONTEST_IDS))
 
     r1 = Recipient(
         email="s@x.com",
@@ -571,6 +584,15 @@ def main() -> int:
     )
     check("赛事日历链接续接正确", "token=1.abc&amp;contest=" in html2)
     check("邮件页脚含我的日历", html2.count("我的日历") >= 1)
+
+    print("\n[21] 单实例运行锁")
+    lock_path = os.path.join(tempfile.mkdtemp(), "run.lock")
+    first, second = RunLock(lock_path), RunLock(lock_path)
+    check("首个实例拿到锁", first.acquire() is True)
+    check("第二个实例被拒绝（防重复发信）", second.acquire() is False)
+    first.release()
+    check("释放后可再次获取", second.acquire() is True)
+    second.release()
 
     print(f"\n结果：{PASS} 项通过，{FAIL} 项失败")
     return 1 if FAIL else 0

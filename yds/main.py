@@ -28,6 +28,7 @@ from .ai.cache import AiCache
 from .ai.client import AiConfig
 from .config import settings
 from .dispatch import dispatch
+from .lock import RunLock
 from .mailer import build_html, build_text, sort_notices
 from .models import Notice
 from .publish import (
@@ -189,6 +190,15 @@ def main(argv: List[str] | None = None) -> int:
     if args.max_notify:
         cfg["max_notify"] = args.max_notify
     fetch.reset_stats()
+
+    # 只有会读-改-写状态的运行才需要独占：--check / --preview 是只读的，
+    # --dry-run 也不落盘。其余模式（定时任务、--backfill）互相排斥，
+    # 否则后写者会覆盖前者的 seen.json，导致下一轮重复发信。
+    writes_state = not (args.check or args.preview or args.dry_run)
+    run_lock = RunLock(os.path.join(ROOT, "data/.run.lock"))
+    if writes_state and not run_lock.acquire():
+        log.error("已有一个实例在运行（data/.run.lock 被占用），本轮跳过以免重复发信 / 覆盖状态")
+        return 2
 
     sender = build_client(cfg.get("mail") or {})
     static_to = args.to or settings.mail_to
