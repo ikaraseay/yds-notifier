@@ -19,8 +19,8 @@ export function loginPage(site: string, count: number, deleted = false): Respons
     title: site,
     heading: "订阅<em>研电赛</em>通知",
     body: `
-      <p class="sub">报名、评审、晋级、决赛，研电赛的重要通知，一封邮件替你整理好。
-         有新公告就推送，没有就不打扰。</p>
+      <p class="sub">研电赛的通知散在竞赛官网、研创网和各个赛事站点。
+        这里替你盯着：有新公告才发一封邮件，没有就不打扰。</p>
       <div class="count">已有 ${count} 人订阅</div>
       ${deleted ? `<div class="alert ok" role="status">账号已注销，订阅记录也已删除。</div>` : ""}
       <form id="f">
@@ -30,13 +30,13 @@ export function loginPage(site: string, count: number, deleted = false): Respons
         <div id="msg" role="status" aria-live="polite"></div>
       </form>`,
     extra: `<div class="tip">
-      不用设置密码：填邮箱后会收到一封登录邮件，<strong>点里面的链接验证邮箱</strong>；
-      首次订阅还会再收到一封确认邮件，点过确认才开始收通知。<br>
-      登录链接 15 分钟内有效、只能用一次。
+      不需要密码。填邮箱 → 收信 <strong>点链接验证</strong> →
+      首次订阅再点一次确认，之后才会开始收到通知。<br>
+      链接 15 分钟内有效，且只能用一次。
     </div>
-    <div class="tip" style="margin-top:12px">
-      也能用 <a href="/archive">通知归档</a> · <a href="/feed.xml">RSS</a> 查看通知；
-      日历按个人订阅生成，登录控制台后即可领取自己的日历地址。
+    <div class="tip tip--tight">
+      不订阅也能看：<a href="/archive">通知归档</a> · <a href="/feed.xml">RSS</a>。
+      想要日历就登录，控制台里复制你的专属地址（已按角色和赛事过滤）。
     </div>`,
     script: LOGIN_SCRIPT,
   });
@@ -54,7 +54,7 @@ export function dashboardPage(user: User, calendarUrl = ""): Response {
     return `<label class="opt${on ? " is-on" : ""}">
   <input type="checkbox" name="${esc(c.key)}"${on ? " checked" : ""}>
   <span class="box"></span>
-  <span class="name"><span class="dot" style="background:${c.color}"></span>${esc(c.label)}</span>
+  <span class="name"><span class="dot dot--${c.key}"></span>${esc(c.label)}</span>
   <span class="desc">${esc(c.desc)}</span>
 </label>`;
   }).join("\n");
@@ -92,28 +92,28 @@ export function dashboardPage(user: User, calendarUrl = ""): Response {
     title: "控制台",
     heading: "通知<em>设置</em>",
     body: `
-      <p class="sub">先选你的角色和关注的赛事，再挑栏目。改动会先记在本机，${Math.round(PREFS_APPLY_DELAY_MS / 60000)} 分钟内自动保存——连续调整只写一次。</p>
+      <p class="sub">先选角色和赛事，再挑栏目。改动先存在本机，${Math.round(PREFS_APPLY_DELAY_MS / 60000)} 分钟后自动生效 —— 连着改几项也只保存一次。</p>
       <div class="who" id="who">
         <span>${esc(user.email)}</span>
         <a href="#" id="logout">退出登录</a>
       </div>
       ${pending ? `<div class="alert err" id="pending-box" role="status">
         还差一步：我们给 <b>${esc(user.email)}</b> 发了一封确认邮件，点里面的链接才会开始收通知。
-        <button type="button" id="resend" class="btn-secondary" style="margin-top:10px">重新发送确认邮件</button>
+        <button type="button" id="resend" class="btn-secondary btn-gap">重新发送确认邮件</button>
       </div>` : ""}
       <div id="settings" data-email="${esc(user.email)}" data-apply-delay="${PREFS_APPLY_DELAY_MS}">
-        <div class="section" style="margin-top:22px;border-top:0;padding-top:0">
+        <div class="section section--first">
           <h2>我的角色</h2>
-          <p class="sub" style="font-size:12px;margin:0 0 10px">
-            每个角色看到的内容不同：学生看报名与提交，导师看评审与决赛，培养单位看审核与承办。
-            多选按并集推送。
+          <p class="sub hint">
+            不同角色看到的内容不同：学生关注报名与提交，导师关注评审与决赛，培养单位关注审核与承办。
+            多选取并集。
           </p>
           <div id="aud-opts" class="opts">${audOpts}</div>
         </div>
         <div class="section">
           <h2>关注的赛事</h2>
-          <p class="sub" style="font-size:12px;margin:0 0 10px">
-            勾选要跟踪的比赛。<strong>一个都不选 = 接收全部赛事</strong>。
+          <p class="sub hint">
+            只勾你要跟的赛事。<strong>一个都不勾 = 全部赛事都收</strong>。
             当前：${allContests ? "全部赛事" : `${pickedContests.size} 项`}。
           </p>
           <div class="row-actions">
@@ -125,7 +125,7 @@ export function dashboardPage(user: User, calendarUrl = ""): Response {
         </div>
         <div class="section">
           <h2>通知栏目</h2>
-          <p class="sub" style="font-size:12px;margin:0 0 10px">
+          <p class="sub hint">
             栏目决定内容类型，角色决定视角，两者取交集。
           </p>
           <div id="opts" class="opts">${opts}</div>
@@ -133,19 +133,19 @@ export function dashboardPage(user: User, calendarUrl = ""): Response {
       </div>
       <div class="section">
         <h2>推送频率</h2>
-        <p class="sub" style="font-size:12px;margin:0 0 10px">
+        <p class="sub hint">
           不想被频繁打扰？改成日报或周报，同一时段的通知会合并成一封。
         </p>
         <select id="frequency" class="field" aria-label="推送频率">${freqOptions}</select>
       </div>
       <div class="section">
         <h2>暂停订阅</h2>
-        <p class="sub" style="font-size:12px;margin:0 0 10px">
-          选一个日期，在那之前不收邮件；暂停期间的通知会随恢复后的第一封摘要补上。
+        <p class="sub hint">
+          在这个日期之前不发信。暂停期间攒下的通知，会在恢复后的第一封里补上。
         </p>
         <input type="date" id="pausedUntil" class="field" aria-label="暂停至"
                value="${esc(user.prefs.pausedUntil || "")}">
-        <button type="button" id="clearPause" class="btn-secondary" style="margin-top:10px">清除暂停</button>
+        <button type="button" id="clearPause" class="btn-secondary btn-gap">清除暂停</button>
       </div>
       <div id="msg" role="status" aria-live="polite"></div>
       <div id="applybar" class="applybar" aria-live="polite">
@@ -154,16 +154,16 @@ export function dashboardPage(user: User, calendarUrl = ""): Response {
       </div>
       <div class="section">
         <h2>我的日历</h2>
-        <p class="sub" style="font-size:12px;margin:0 0 10px">
-          只包含你勾选的角色与赛事，粘到手机 / Outlook 的「订阅日历」里即可，
-          改设置后自动同步。公共日历已下线，其他人拿到你的地址也改不了内容。
+        <p class="sub hint">
+          只包含你勾选的角色与赛事。粘贴到手机或 Outlook 的「订阅日历」即可，
+          改设置后自动同步；公共日历已下线，别人拿到你的地址也改不了内容。
         </p>
         ${calendarUrl ? `<input type="text" id="calUrl" class="field" readonly
                value="${esc(calendarUrl)}" aria-label="我的日历地址">
-        <button type="button" id="copyCal" class="btn-secondary" style="margin-top:10px">复制日历地址</button>`
-        : `<p class="sub" style="font-size:12px">日历签名未配置，暂时无法生成个人地址。</p>`}
+        <button type="button" id="copyCal" class="btn-secondary btn-gap">复制日历地址</button>`
+        : `<p class="sub hint">日历签名未配置，暂时无法生成个人地址。</p>`}
       </div>
-      <div class="tip" style="margin-top:16px">
+      <div class="tip tip--last">
         <a href="/archive">通知归档</a> · <a href="/feed.xml">RSS 订阅</a>${calendarUrl
           ? ` · <a href="${esc(calendarUrl)}">加入日历</a>` : ""}
       </div>

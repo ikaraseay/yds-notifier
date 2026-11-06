@@ -61,15 +61,15 @@ function confirmPage(email: string): Response {
   return messagePage({
     title: "确定要退订吗",
     heading: "确定要退订吗？",
-    bodyHtml: `退订后 <b>${esc(email)}</b> 将不再收到研电赛通知邮件。` +
-      `如果只是嫌邮件多，也可以改成每周一封摘要。`,
+    bodyHtml: `退订后 <b>${esc(email)}</b> 不会再收到任何通知邮件。` +
+      `如果只是嫌邮件太多，也可以改成每周一封摘要。`,
     // 不带 action：表单提交回当前 URL，query 中的 email/token 会被保留
-    extraHtml: `<form method="POST" style="margin-top:18px">
-      <label for="reason" style="display:block;font-size:13px;margin-bottom:8px;">退订原因（可选，帮助我们改进）</label>
+    extraHtml: `<form method="POST" class="unsub-form">
+      <label for="reason" class="unsub-label">退订原因（可选，帮助我们改进）</label>
       <select id="reason" name="reason" class="field">
         <option value="">不填</option>${options}
       </select>
-      <div style="margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;">
+      <div class="unsub-actions">
         <button type="submit" name="action" value="unsubscribe">确认退订</button>
         <button type="submit" name="action" value="lowfreq" class="btn-secondary">改成周报就好</button>
       </div>

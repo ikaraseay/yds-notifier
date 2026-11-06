@@ -1,6 +1,7 @@
 /** 界面层：HTML 骨架、响应构造。所有响应统一带安全头与 CSP nonce。 */
 
 import { csp, esc, newNonce, securityHeaders } from "../security";
+import { siteFooter } from "./footer";
 import { CSS } from "./styles";
 
 export interface PageOpts {
@@ -23,14 +24,15 @@ export function page({ title, heading, body, extra = "", script = "" }: PageOpts
 
   const html = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>${esc(title)}</title><meta name="robots" content="noindex">
+<title>${esc(title)}</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><meta name="robots" content="noindex">
 <style nonce="${nonce}">${CSS}</style></head><body>
 <div class="card">
   <div class="mark"></div>
   <h1>${safeHeading}</h1>
   ${body}
   ${extra}
-</div>${hasScript ? `<script nonce="${nonce}">${script}</script>` : ""}</body></html>`;
+</div>
+${siteFooter()}${hasScript ? `<script nonce="${nonce}">${script}</script>` : ""}</body></html>`;
 
   return new Response(html, {
     status,

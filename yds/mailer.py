@@ -536,7 +536,7 @@ def build_html(
            style="background:#FFD93D;border:3px solid #2E2A33;border-radius:8px;
                   padding:26px 24px;">
       <tr><td>
-        <div style="font-size:12px;color:#2E2A33;letter-spacing:1px;font-weight:700;">YAN DIAN SAI · NOTICE</div>
+        <div style="font-size:12px;color:#2E2A33;letter-spacing:1px;font-weight:700;">研电赛 · 非官方通知</div>
         <div style="padding:8px 0 0;font-size:24px;font-weight:800;color:#2E2A33;
                     line-height:32px;">{_esc(greet)}</div>
         <div style="padding:8px 0 0;font-size:13px;color:#5a6072;line-height:22px;">
@@ -558,7 +558,8 @@ def build_html(
 
   <!-- 页脚 -->
   <tr><td style="padding:14px 0 0;font-size:11px;color:#b8bccb;line-height:19px;text-align:center;">
-    本邮件由「{_esc(site or '研电赛通知订阅')}」自动推送 · 数据来自研创网与中国电子学会官网<br>
+    非官方项目「{_esc(site or '研电赛通知订阅')}」自动推送 · 数据来自研创网与各赛事官网<br>
+    关键时间节点请以组委会公告为准<br>
     {' &nbsp;·&nbsp; '.join(footer_links)}
   </td></tr>
   <tr><td align="center" style="padding:14px 0 0;font-size:11px;color:#6b6572;">

@@ -87,6 +87,13 @@ def main() -> int:
     check("MAIL_FROM_ADDRESS 是纯地址", "@" in settings.mail_from_address and "<" not in settings.mail_from_address)
     check("UNSUB_TTL_DAYS >= 1", settings.unsub_ttl_days >= 1)
 
+    print("\n[1a] 发件人显示名带 [非官方]")
+    from .senders import unofficial_sender_name  # 延迟导入：避免 selftest 顶部拉进网络依赖
+
+    check("补上后缀", unofficial_sender_name("研电赛通知") == "研电赛通知 [非官方]")
+    check("幂等（不会叠加）", unofficial_sender_name("研电赛通知 [非官方]") == "研电赛通知 [非官方]")
+    check("空名有兜底", unofficial_sender_name("  ") == "研电赛通知 [非官方]")
+
     print("\n[1b] 域名派生（自定义域名 / workers.dev）")
     check(
         "显式 PUBLIC_BASE_URL 优先",

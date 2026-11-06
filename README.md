@@ -183,6 +183,8 @@ flowchart LR
 | `/api/notices` | POST | Python 同步通知元数据（公开字段），Bearer 鉴权 |
 | `/api/stats` | GET | 退订原因与降频统计，Bearer 鉴权 |
 | `/api/webhooks/resend` | POST | Resend webhook（Svix 验签），自动清理退信 / 投诉地址 |
+| `/robots.txt` · `/llms.txt` | GET / HEAD | 爬虫规则（个人页面不进索引）与 AI 代理说明 |
+| `/favicon.svg` · `/favicon.ico` | GET / HEAD | 站点图标（内联 SVG） |
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -483,6 +485,11 @@ git push origin main
 - **域名只填一处**：改 `CUSTOM_DOMAIN` 后，登录链接、邮件里的退订链接、名单 API 地址全部自动跟随。
 - **发件域名独立于站点域名**：站点在 `notice.yds.meovo.cc`，发件人是 `notice@meovo.cc`；
   `MAIL_FROM_ADDRESS` 只需属于 Resend 已验证域名。
+- **显示名固定带 `[非官方]`**：`MAIL_FROM_NAME` 只写基础名（如 `研电赛通知`），
+  Worker 的 `unofficialSenderName()` 与 Python 的 `unofficial_sender_name()` 会补上后缀 ——
+  这是合规要求，写死在代码里，换部署或漏配变量都不会丢。
+- **页脚统一**：每个页面底部都有「非官方声明 + 项目地址 + 错误报告」，
+  地址集中在 `worker/src/static.ts`（`PROJECT_URL` / `ISSUES_URL`），改一处全站生效。
 - `.env.example` 每项标注去处：`[CF-V]` / `[CF-S]` / `[GH]` / `[构建]` / `[本地]`。
 - `npm run sync-config` 把域名与 KV id 写进 `wrangler.toml`；
   `bash scripts/ops.sh secrets` 把运行时配置同步到 Cloudflare 与 GitHub。

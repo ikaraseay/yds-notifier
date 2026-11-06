@@ -1,5 +1,17 @@
 /** 界面层：页面样式。由 layout.ts 以 CSP nonce 内联输出，不引用任何外部资源。 */
 
+import { CATEGORIES } from "../auth";
+
+/**
+ * 栏目色点。以前写在 HTML 的 style 属性里（`style="background:#FF6B6B"`），
+ * 但 style-src 只允许带 nonce 的 <style>，属性级样式会被整条丢弃 ——
+ * 表现是四个色点全变白、控制台报 CSP 错误。改成按 key 生成 class，
+ * 颜色仍只在这里定义一份。
+ */
+const DOT_COLORS = CATEGORIES.map(
+  (c) => `.opt .dot.dot--${c.key}{background:${c.color}}`,
+).join("\n");
+
 export const CSS = `
 :root{
   --memphis-background:#FFF4E4;
@@ -15,7 +27,7 @@ export const CSS = `
 *{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
 body{
   margin:0;min-height:100vh;padding:28px 16px;
-  display:flex;align-items:center;justify-content:center;
+  display:flex;flex-direction:column;align-items:center;justify-content:center;
   background-color:var(--memphis-background);
   background-image:var(--memphis-pattern);
   background-size:22px 22px;
@@ -72,6 +84,11 @@ button:disabled{opacity:.6;cursor:not-allowed;transform:none;box-shadow:4px 4px 
 .err{background:var(--memphis-coral);color:#fff}
 .tip{margin-top:24px;padding-top:18px;border-top:2px dashed #d8cfc0;
   font-size:12px;color:#6b6572;line-height:1.8}
+/* 间距变体。CSP 的 style-src 只放行带 nonce 的 <style>，属性级内联样式会被
+   浏览器整条丢弃（控制台还会刷一条报错），所以布局差异一律走 class。 */
+.tip.tip--tight{margin-top:12px}
+.tip.tip--last{margin-top:16px}
+.sub.hint{font-size:12px;margin:0 0 10px}
 a{color:var(--memphis-blue);font-weight:700;text-underline-offset:3px}
 .btn-secondary{display:inline-block;margin-top:22px;padding:11px 24px;
   border:3px solid var(--memphis-ink);border-radius:6px;background:#fff;
@@ -79,9 +96,15 @@ a{color:var(--memphis-blue);font-weight:700;text-underline-offset:3px}
   box-shadow:4px 4px 0 var(--memphis-ink);
   transition:transform 120ms var(--ease-out),box-shadow 120ms var(--ease-out)}
 .btn-secondary:active{transform:translate(4px,4px);box-shadow:0 0 0 var(--memphis-ink)}
+.btn-secondary.btn-gap{margin-top:10px}
 .detail{margin-top:16px;background:#FFF4E4;border:2px dashed var(--memphis-ink);
   border-radius:6px;padding:11px 13px;font-size:12px;color:#6b6572;
   line-height:1.7;word-break:break-all}
+/* 退订确认页的表单片段（同样不能用 style 属性） */
+.unsub-form{margin-top:18px}
+.unsub-label{display:block;font-size:13px;margin-bottom:8px}
+.unsub-actions{margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.unsub-actions button{width:auto;flex:1 1 140px;margin-top:0}
 .who{display:flex;align-items:center;justify-content:space-between;gap:12px;
   margin:18px 0 4px;padding:12px 14px;border:2px solid var(--memphis-ink);
   border-radius:6px;background:#FFF4E4;font-size:13px;font-weight:700;word-break:break-all}
@@ -107,6 +130,7 @@ a{color:var(--memphis-blue);font-weight:700;text-underline-offset:3px}
 .opt input:focus-visible~.box{outline:3px solid var(--memphis-blue);outline-offset:3px}
 .opt .name{font-size:14px;font-weight:800;display:flex;align-items:center;gap:8px}
 .opt .dot{width:10px;height:10px;border-radius:50%;border:2px solid var(--memphis-ink);flex:none}
+${DOT_COLORS}
 .opt .desc{font-size:12px;color:#6b6572;margin-top:3px;line-height:1.6}
 .opt.is-on{box-shadow:4px 4px 0 var(--memphis-ink)}
 .danger{margin-top:28px;padding-top:20px;border-top:2px dashed #d8cfc0}
@@ -118,6 +142,8 @@ a{color:var(--memphis-blue);font-weight:700;text-underline-offset:3px}
 .btn-danger:hover{background:#FFF0F0}
 .btn-danger:active{transform:translate(4px,4px);box-shadow:0 0 0 var(--memphis-coral)}
 .section{margin-top:26px;padding-top:18px;border-top:2px dashed #d8cfc0}
+/* 紧跟 who 卡片的第一段：不要顶部分隔线，改由 .who 自己撑开间距 */
+.section.section--first{margin-top:22px;border-top:0;padding-top:0}
 .section h2{font-size:13px;margin:0 0 8px;font-weight:800;letter-spacing:.3px}
 .row-actions{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}
 .btn-mini{width:auto;margin:0;padding:7px 13px;font-size:12px;font-weight:800;
@@ -141,6 +167,15 @@ a{color:var(--memphis-blue);font-weight:700;text-underline-offset:3px}
   background:#fff;border:3px solid var(--memphis-ink);border-radius:6px;outline:none}
 .field:focus-visible{outline:3px solid var(--memphis-blue);outline-offset:2px}
 select.field{appearance:none;background-image:none;cursor:pointer}
+/* 页脚：非官方声明 + 项目地址 + 错误报告（见 ui/footer.ts） */
+.foot{width:100%;max-width:520px;margin:26px auto 0;padding:0 4px;
+  text-align:center;font-size:11.5px;color:#6b6572;line-height:1.9}
+.foot p{margin:0}
+.foot .foot-note{margin-bottom:5px;color:#8a8390}
+.foot-links a{color:#4a4550;font-weight:700;text-decoration:none;
+  border-bottom:1px dashed #c2b8a9}
+.foot-links a:hover{border-bottom-style:solid}
+.foot-links span{margin:0 5px;color:#bdb3a4}
 @media (prefers-reduced-motion:reduce){
   *{animation:none!important;transition:none!important}
 }

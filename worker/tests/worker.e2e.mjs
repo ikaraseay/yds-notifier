@@ -962,7 +962,7 @@ const check = (name, cond, extra = "") => {
   check("控制台有快捷选择", r.text.includes("只选研电赛") && r.text.includes("全选"));
   check("控制台带 5 分钟暂存窗口", r.text.includes('data-apply-delay="300000"'), r.text.slice(0, 120));
   check("控制台有立即生效入口", r.text.includes('id="applyNow"') && r.text.includes("立即生效"));
-  check("控制台说明改动延迟生效", r.text.includes("5 分钟内自动保存"));
+  check("控制台说明改动延迟生效", r.text.includes("分钟后自动生效"));
   check("赛事勾选可提交", r.text.includes('name="contest" value="电子设计竞赛"'));
 
   r = await call("/api/list", { headers: { Authorization: "Bearer admin-secret" } });
@@ -1182,6 +1182,62 @@ const check = (name, cond, extra = "") => {
   check("无日期动态不占发布日", !r.text.includes('id="d-2026-11-09"'));
   check("只有截止日的通知以截止进日历",
     r.text.includes('id="d-2026-11-10"') && r.text.includes("<b>截止</b>"));
+
+  console.log("\n[39] 控制台零报错：无内联样式 + 站点图标");
+
+  // CSP 是 style-src 'nonce-…'，属性级 style="…" 会被整条丢弃（色点变白、
+  // 间距塌掉），浏览器控制台还会刷一堆 error。页面里一律不许出现 style 属性。
+  // 前面的退出 / 注销用例已经把会话销毁了，这里重新走一次魔法链接
+  const uiEmail = "ui-check@qq.com";
+  await post("/api/login", { email: uiEmail });
+  const uiSid = sidOf(await call(magicPathOf(uiEmail)));
+  r = await call("/dashboard", { headers: { Cookie: `yds_sid=${uiSid}` } });
+  check("控制台确实渲染了", r.status === 200 && r.text.includes('id="settings"'), String(r.status));
+  check("控制台无内联样式", !/style="/.test(r.text), (r.text.match(/style="[^"]*"/g) || []).join(" "));
+  check("控制台声明站点图标", r.text.includes('rel="icon" type="image/svg+xml" href="/favicon.svg"'));
+  check("CSP 放行自身图标", (r.headers.get("content-security-policy") || "").includes("img-src 'self'"));
+
+  r = await call("/");
+  check("登录页无内联样式", !/style="/.test(r.text));
+
+  // 退订确认页曾有三处 style 属性，CSP 下标签会掉成行内文本
+  const unsubTk = new URL("https://x" + signedCal(email, "unsub", 30)).searchParams.get("token");
+  r = await call(`/unsubscribe?email=${encodeURIComponent(email)}&token=${unsubTk}`);
+  check("退订页无内联样式", r.status === 200 && !/style="/.test(r.text), String(r.status));
+
+  const icoSvg = await call("/favicon.svg");
+  check("favicon.svg 可用", icoSvg.status === 200 && (icoSvg.headers.get("content-type") || "").includes("image/svg+xml"));
+  const icoFile = await call("/favicon.ico");
+  check("favicon.ico 不再 404", icoFile.status === 200);
+  check("图标可缓存", (icoFile.headers.get("cache-control") || "").includes("max-age"));
+
+  console.log("\n[40] 非官方标识 / 项目地址 / 爬虫说明");
+
+  r = await call("/robots.txt");
+  check("robots 200 且是纯文本", r.status === 200 && (r.headers.get("content-type") || "").includes("text/plain"));
+  check("robots 拒绝个人页面", /Disallow: \/dashboard/.test(r.text) && /Disallow: \/unsubscribe/.test(r.text));
+  check("robots 放行归档与 RSS", /Allow: \/archive/.test(r.text) && /Allow: \/feed\.xml/.test(r.text));
+
+  r = await call("/llms.txt");
+  check("llms.txt 200", r.status === 200);
+  check("llms.txt 声明非官方", r.text.includes("非官方"));
+  check("llms.txt 给出公开内容与原文提醒",
+    r.text.includes("/archive") && r.text.includes("/feed.xml") && r.text.includes("以原文为准"));
+  check("llms.txt 指向源码与反馈", r.text.includes("github.com/ikaraseay/yds-notifier"));
+
+  r = await call("/");
+  check("页脚有项目地址", r.text.includes('href="https://github.com/ikaraseay/yds-notifier"'));
+  check("页脚有错误报告入口", r.text.includes("github.com/ikaraseay/yds-notifier/issues/new"));
+  check("页脚标注非官方", r.text.includes("非官方项目"));
+  check("页脚出现在归档页", (await call("/archive")).text.includes("foot-links"));
+
+  // 发件人显示名必须在代码里强制带 [非官方]：配置漏填也不该丢
+  const mailCountBefore = sent.length;
+  await post("/api/login", { email: "tag@qq.com" });
+  const tagged = sent[sent.length - 1];
+  check("确实发出了新邮件", sent.length > mailCountBefore);
+  check("发件人带 [非官方]", String(tagged.from).includes("[非官方]"), tagged.from);
+  check("正文页脚标注非官方", String(tagged.html).includes("非官方项目"));
 
   console.log(`\n结果：${pass} 项通过${process.exitCode ? "，存在失败" : "，全部通过"}`);
 })();
