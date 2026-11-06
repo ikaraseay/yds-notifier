@@ -122,6 +122,17 @@ const env = {
   RATE: new MockDO(),
 };
 
+/** 公共日历已下线：测试统一用签名个人日历地址（不要求该邮箱真实存在）。 */
+function signedCal(email = "reader@example.com", purpose = "cal", ttlDays = 3650) {
+  const exp = Math.floor(Date.now() / 1000) + ttlDays * 86400;
+  const sig = crypto
+    .createHmac("sha256", env.UNSUB_SECRET)
+    .update(`${purpose}:${email.toLowerCase()}:${exp}`)
+    .digest("hex")
+    .slice(0, 32);
+  return `/calendar.ics?email=${encodeURIComponent(email)}&token=${exp}.${sig}`;
+}
+
 let ipSeq = 0;
 const call = async (path, init = {}, ip) => {
   const req = new Request("https://yds.workers.dev" + path, {
@@ -581,7 +592,7 @@ const check = (name, cond, extra = "") => {
   r = await call("/feed.xml");
   check("RSS 200 且结构正确", r.status === 200 && r.text.includes("<rss"), r.text.slice(0, 120));
   check("RSS 含两条 item", (r.text.match(/<item>/g) || []).length === 2);
-  r = await call("/calendar.ics");
+  r = await call(signedCal());
   check("日历 200 且含 VCALENDAR", r.status === 200 && r.text.includes("BEGIN:VCALENDAR"));
   check("日历含截止日", r.text.includes("DTSTART;VALUE=DATE:20261125"));
   check("日历使用 CRLF", r.text.includes("\r\n"));
@@ -743,7 +754,7 @@ const check = (name, cond, extra = "") => {
   check("RSS 含事件日", r.text.includes("决赛举行：2026-08-10"));
   check("RSS 标出重要", r.text.includes("【重要】"));
 
-  r = await call("/calendar.ics");
+  r = await call(signedCal());
   const ics = r.text;
   check("日历 200", r.status === 200, r.status);
   check("DTSTART 用真实事件日", ics.includes("DTSTART;VALUE=DATE:20260810"));
@@ -767,7 +778,7 @@ const check = (name, cond, extra = "") => {
     method: "POST", body: JSON.stringify(aiPayload),
     headers: { Authorization: "Bearer admin-secret" },
   });
-  const ics2 = (await call("/calendar.ics")).text;
+  const ics2 = (await call(signedCal())).text;
   const seqs = (s) => (s.match(/SEQUENCE:\d+/g) || []).join("|");
   check("重复同步 SEQUENCE 稳定", seqs(ics) === seqs(ics2));
   check("重复同步不产生重复事件",
@@ -833,7 +844,7 @@ const check = (name, cond, extra = "") => {
   check("归档显示行动建议", r.text.includes("要做什么："));
   check("行动建议被转义", r.text.includes("&lt;b&gt;") && !r.text.includes("<b>在 11 月"));
 
-  r = await call("/calendar.ics");
+  r = await call(signedCal());
   const ics3 = r.text;
   check("赛程生成报名截止事件", ics3.includes("【报名截止】电子设计竞赛"));
   check("赛程生成决赛事件", ics3.includes("【决赛开始】电子设计竞赛"));
@@ -930,12 +941,21 @@ const check = (name, cond, extra = "") => {
   r = await call("/archive?audience=admin");
   check("归档按角色筛选为空", r.text.includes("没有符合筛选条件的通知"));
 
-  r = await call("/calendar.ics?contest=" + encodeURIComponent("电子设计竞赛"));
+  r = await call(signedCal() + "&contest=" + encodeURIComponent("电子设计竞赛"));
   check("日历按赛事筛选保留事件", r.text.includes("UID:p1@"));
-  r = await call("/calendar.ics?contest=" + encodeURIComponent("人工智能创新大赛"));
+  r = await call(signedCal() + "&contest=" + encodeURIComponent("人工智能创新大赛"));
   check("日历按赛事筛选排除事件", !r.text.includes("UID:p1@"));
-  r = await call("/calendar.ics?contest=" + encodeURIComponent("电子设计竞赛") + "&audience=student");
+  r = await call(signedCal() + "&contest=" + encodeURIComponent("电子设计竞赛") + "&audience=student");
   check("角色链接仍保留赛程", r.text.includes("【报名截止】电子设计竞赛"));
+
+  console.log("\n[33b] 公共日历已下线");
+  r = await call("/calendar.ics");
+  check("无签名日历 401", r.status === 401, String(r.status));
+  check("401 提示去控制台领取", r.text.includes("个人订阅地址"));
+  r = await call("/calendar.ics?email=reader%40example.com&token=1.bad");
+  check("坏签名 401", r.status === 401, String(r.status));
+  r = await call(signedCal("reader@example.com", "unsub"));
+  check("退订 token 不能当日历用", r.status === 401, String(r.status));
 
   console.log("\n[34] 个人日历：按订阅者偏好过滤");
 
@@ -977,8 +997,8 @@ const check = (name, cond, extra = "") => {
   r = await call(calUrl(pEmail));
   check("未关注赛事的事件被过滤", !r.text.includes("UID:p1@"));
   check("赛程随赛事偏好收敛", !r.text.includes("【报名截止】电子设计竞赛"));
-  r = await call("/calendar.ics");
-  check("公开日历仍含全部事件", r.text.includes("UID:p1@"));
+  r = await call(signedCal());
+  check("签名日历始终返回 200", r.status === 200 && r.text.includes("UID:p1@"));
 
   // 角色过滤：只留培养单位 → student/advisor 的通知被过滤
   await call("/api/prefs", {
@@ -993,16 +1013,15 @@ const check = (name, cond, extra = "") => {
   check("角色不符的事件被过滤", !r.text.includes("UID:p1@"));
   check("赛程按赛事保留", r.text.includes("【报名截止】电子设计竞赛"));
 
-  // 用途隔离：退订 token 不能当个人日历 token 用（此时偏好已排除 p1，
-  // 若仍返回 p1 说明签名没通过、退回了公开日历）
+  // 用途隔离：退订 token 不能当个人日历 token 用，直接 401（不再退回公开日历）
   r = await call(calUrl(pEmail, "unsub"));
-  check("退订 token 不能读个人日历", r.text.includes("UID:p1@"));
+  check("退订 token 不能读个人日历", r.status === 401, String(r.status));
 
-  // 签名被篡改 → 同样退回公开日历，不泄露偏好
+  // 签名被篡改 → 同样 401，不泄露任何日程
   r = await call(
     `/calendar.ics?email=${encodeURIComponent(pEmail)}&token=${emailToken(pEmail, "cal").slice(0, -1)}0`,
   );
-  check("篡改签名退回公开日历", r.text.includes("UID:p1@"));
+  check("篡改签名 401", r.status === 401, String(r.status));
 
   // 控制台给出个人日历地址
   r = await call("/dashboard", { headers: { Cookie: `yds_sid=${freshSid}` } });
@@ -1018,13 +1037,13 @@ const check = (name, cond, extra = "") => {
   });
 
   env.SUBS.reads = 0;
-  r = await call("/calendar.ics");
+  r = await call(signedCal());
   const firstReads = env.SUBS.reads;
-  check("首次日历只读 1 次 KV（通知与赛程合并读取）", firstReads === 1, String(firstReads));
+  check("首次日历 2 次读（通知/赛程合并 1 次 + 偏好 1 次）", firstReads === 2, String(firstReads));
 
   env.SUBS.reads = 0;
-  await call("/calendar.ics");
-  check("60 秒内再次拉日历 0 次 KV 读", env.SUBS.reads === 0, String(env.SUBS.reads));
+  await call(signedCal());
+  check("60 秒内再次拉日历只读 1 次（仅偏好）", env.SUBS.reads === 1, String(env.SUBS.reads));
 
   env.SUBS.reads = 0;
   await call("/archive");
@@ -1033,7 +1052,7 @@ const check = (name, cond, extra = "") => {
   env.SUBS.reads = 0;
   await call(calUrl(pEmail));
   const personalReads = env.SUBS.reads;
-  check("个人日历额外只读 1 次（偏好）", personalReads === 1, String(personalReads));
+  check("已存在订阅者同样只多读 1 次", personalReads === 1, String(personalReads));
 
   // 写入必须让缓存失效，否则归档 / 日历会长期显示旧数据
   env.SUBS.reads = 0;

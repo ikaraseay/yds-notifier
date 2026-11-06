@@ -55,15 +55,15 @@ async function confirmSubscription(env: Env, email: string, user: User): Promise
     `已确认订阅「${esc(cfg.siteName)}」。有新公告会按你选择的频率发到这个邮箱；` +
     `在控制台可以随时调整栏目、改成日报 / 周报，或暂停一段时间。`;
   const note =
-    `错过邮件也不怕：<a href="${esc(base)}/archive">通知归档</a>、` +
-    `<a href="${esc(base)}/feed.xml">RSS</a> 与 ` +
-    `<a href="${esc(base)}/calendar.ics">日历订阅</a> 都能看到全部通知。`;
+    `错过邮件也不怕：<a href="${esc(base)}/archive">通知归档</a> 与 ` +
+    `<a href="${esc(base)}/feed.xml">RSS</a> 都能看到通知；` +
+    `个人日历（按你的角色与赛事过滤）在控制台一键复制。`;
   await sendMail(
     env,
     email,
     `【订阅成功】${cfg.siteName}`,
     mailShell("订阅成功", intro, "打开控制台", `${base}/dashboard`, note, cfg.siteName),
-    `已确认订阅「${cfg.siteName}」。\n控制台：${base}/dashboard\n归档：${base}/archive\n日历：${base}/calendar.ics`,
+    `已确认订阅「${cfg.siteName}」。\n控制台：${base}/dashboard\n归档：${base}/archive\n个人日历：登录控制台复制`,
   );
 
   if (!already && cfg.mailTo) {
@@ -287,7 +287,7 @@ export async function handleConfirm(url: URL, env: Env): Promise<Response> {
     extraHtml:
       `<a class="btn-secondary" href="/dashboard">打开控制台</a>` +
       `<div class="tip" style="margin-top:16px">也可以订阅 ` +
-      `<a href="/feed.xml">RSS</a> 或 <a href="/calendar.ics">日历</a>，错过邮件也不怕。</div>`,
+      `<a href="/feed.xml">RSS</a>；个人日历在控制台复制，按你的角色与赛事过滤。</div>`,
   });
 }
 

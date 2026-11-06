@@ -61,20 +61,27 @@ def load_config(path: str) -> dict:
         return yaml.safe_load(fh) or {}
 
 
-def _load_zone_offset(path: str) -> int:
+def _load_zone_state(path: str) -> dict:
+    """读取专区游标：offset 为下一轮起点，lastSweep 为最近一次全量扫描日期。"""
     try:
         with open(path, encoding="utf-8") as fh:
             raw = json.load(fh)
-        return max(0, int(raw.get("offset") or 0))
+        return {
+            "offset": max(0, int(raw.get("offset") or 0)),
+            "lastSweep": str(raw.get("lastSweep") or ""),
+        }
     except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return 0
+        return {"offset": 0, "lastSweep": ""}
 
 
-def _save_zone_offset(path: str, offset: int) -> None:
+def _save_zone_state(path: str, offset: int, last_sweep: str) -> None:
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump({"version": 1, "offset": offset}, fh, ensure_ascii=False)
+        json.dump(
+            {"version": 1, "offset": offset, "lastSweep": last_sweep},
+            fh, ensure_ascii=False,
+        )
         fh.write("\n")
     os.replace(tmp, path)
 
@@ -163,6 +170,10 @@ def main(argv: List[str] | None = None) -> int:
     parser.add_argument("--check", action="store_true", help="只抓取并打印结果")
     parser.add_argument("--dry-run", action="store_true", help="不真正发信、不写状态")
     parser.add_argument("--preview", metavar="FILE", help="导出一份 HTML 预览")
+    parser.add_argument(
+        "--backfill", action="store_true",
+        help="只抓取并同步归档 / 日历数据，不发信、不标记已读（补齐历史用）",
+    )
     parser.add_argument("--max-notify", type=int, default=0, help="单封邮件的最大条目数")
     parser.add_argument("--to", default="", help="临时覆盖收件人，测试时用")
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -199,9 +210,26 @@ def main(argv: List[str] | None = None) -> int:
     zone_all = [str(c) for c in (zone_cfg.get("contests") or []) if CONTEST_IDS.get(str(c))]
     zone_per_run = max(1, int(zone_cfg.get("per_run", 4)))
     zone_state_path = os.path.join(ROOT, "data/zones.json")
-    zone_offset = _load_zone_offset(zone_state_path) % len(zone_all) if zone_all else 0
+    zone_state = _load_zone_state(zone_state_path)
+    zone_offset = zone_state["offset"] % len(zone_all) if zone_all else 0
+
+    # 轮询保证「每轮只看 4 项」，但要靠好几轮才能覆盖 19 项；
+    # 一旦 CI 被 GitHub 节流（实际常是几小时才跑一次），归档会长期缺赛事。
+    # 因此每 sweep_days 天强制全量扫一遍，一次补齐所有专区。
+    sweep_days = max(1, int(zone_cfg.get("sweep_days", 1)))
+    today_iso = date.today().isoformat()
+    sweep_due = (
+        watched is None and bool(zone_all) and bool(zone_cfg)
+        and (
+            not zone_state["lastSweep"]
+            or (date.today() - date.fromisoformat(zone_state["lastSweep"])).days >= sweep_days
+        )
+    )
 
     def make_sources():
+        # 全量扫描：把 19 项赛事当作「全部关注」，per_run 自动等于总数、offset 归零
+        if sweep_due:
+            return build_sources(cfg, only_contests=set(zone_all), zone_offset=0)
         return build_sources(cfg, only_contests=watched, zone_offset=zone_offset)
 
     sources = make_sources()
@@ -209,11 +237,13 @@ def main(argv: List[str] | None = None) -> int:
         log.error("没有启用任何数据源，请检查 %s", args.config)
         return 2
     if zone_cfg:
-        if watched is None:
+        if sweep_due:
+            log.info("赛事专区：全量扫描 %s 项（上次全量：%s）", len(zone_all), zone_state["lastSweep"] or "从未")
+        elif watched is None:
             log.info("赛事专区：无人限制赛事，按每轮 %s 项轮询（共 %s 项）", zone_per_run, len(zone_all))
         else:
             log.info("赛事专区：只抓订阅者关注的 %s 项赛事", len(watched or []))
-    needs_send = not (args.check or args.preview)
+    needs_send = not (args.check or args.preview or args.backfill)
     if needs_send:
         if not recipients:
             log.error("收件人为空：请在 .env 填写 MAIL_TO，或在 CI 配置同名 Secret")
@@ -229,9 +259,10 @@ def main(argv: List[str] | None = None) -> int:
     log.info("列表页共 %s 条（%s）", len(meta), fetch.stats_line())
     # 无人限制赛事时推进专区分片游标，保证几轮之后 19 项赛事都被扫过
     if zone_cfg and watched is None and zone_all:
-        next_offset = (zone_offset + zone_per_run) % len(zone_all)
+        next_offset = 0 if sweep_due else (zone_offset + zone_per_run) % len(zone_all)
+        next_sweep = today_iso if sweep_due else zone_state["lastSweep"]
         if not (args.check or args.preview or args.dry_run):
-            _save_zone_offset(zone_state_path, next_offset)
+            _save_zone_state(zone_state_path, next_offset, next_sweep)
         log.info("赛事专区游标 %s → %s（下一轮从该位置继续）", zone_offset, next_offset)
     if not meta:
         # 官网改版 / 全站不可达时必须让 CI 变红，不能伪装成「无新公告」
@@ -436,6 +467,14 @@ def main(argv: List[str] | None = None) -> int:
         if fp != state.published_hash and publish_notices(payload):
             state.set_published_hash(fp)
             archive_changed = True
+
+    if args.backfill:
+        # 只补归档 / 日历数据：不写 seen（否则 CI 下一轮就不发邮件了）、不发信
+        count = len(payload.get("notices", [])) if not args.dry_run else 0
+        if not args.dry_run:
+            state.save()
+        log.info("backfill 完成：归档同步 %s 条，未发信、未标记已读", count)
+        return 0
 
     if not merged and not args.preview and not reminders:
         # 没有新内容：只在抽检刷新过指纹或归档有更新时才落盘，避免每 10 分钟产生一次 git 提交

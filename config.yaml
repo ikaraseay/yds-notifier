@@ -77,10 +77,13 @@ sources:
   # 各主题赛事「独立专区」通知。
   # 订阅者在控制台勾选关注的赛事后，只抓这些赛事；无人限制时按 per_run 轮询，
   # 游标持久化在 data/zones.json，几轮覆盖全部 19 项赛事。
+  # sweep_days：每隔 N 天强制全量扫一遍所有专区。GitHub 的定时任务会被节流
+  # （实测常是 2–5 小时才跑一次），只靠轮询会让归档长期缺赛事，因此每天补一次全量。
   - key: cpipc_zones
     enabled: true
     max_pages: 1
     per_run: 4
+    sweep_days: 1
     allowed_hosts:
       - cpipc.acge.org.cn
     contests:

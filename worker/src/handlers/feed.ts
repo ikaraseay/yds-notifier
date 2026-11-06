@@ -406,20 +406,28 @@ function filterByUrl<T extends { contest?: string; audiences?: string[] }>(items
 export const CAL_TTL_DAYS = 3650;
 
 /**
- * 从 `?email=&token=` 解析订阅者偏好。
+ * 从 `?email=&token=` 校验日历身份。
  *
- * 没有签名 / 签名不对 / token 过期都返回 null → 退回公开日历。
- * 这里刻意不返回 403：日历客户端看到错误只会静默停止同步，
- * 用户反而不知道链接失效了；退回「全部通知」至少内容仍在。
+ * **不再提供公共日历**：没有签名 / 签名不对 / token 过期一律拒绝，
+ * 由调用方返回 401。这样每个人看到的都只是自己勾选的赛事与角色，
+ * 也避免公开日历被爬虫或陌生人当免费数据源。
+ *
+ * 返回 `prefs: null` 表示「签名有效但 KV 里查不到该用户」（如已注销）：
+ * 此时按不过滤处理，让链接到期的老用户至少不会看到空白日历。
  */
-async function prefsFromUrl(env: Env, url: URL): Promise<Prefs | null> {
+interface CalendarIdentity {
+  email: string;
+  prefs: Prefs | null;
+}
+
+async function calendarIdentity(env: Env, url: URL): Promise<CalendarIdentity | null> {
   const email = (url.searchParams.get('email') || '').trim().toLowerCase();
   const token = (url.searchParams.get('token') || '').trim();
   if (!email || !token) return null;
   if (!(await verifyEmailToken(env, email, token, 'cal', CAL_TTL_DAYS))) return null;
   // 日历每 15 分钟轮询一次，偏好却很少改：60 秒边缘缓存足够，能挡住重试与多设备并发
   const user = await getUser(env.SUBS, email, { cacheTtl: 60 });
-  return user?.prefs ?? null;
+  return { email, prefs: user?.prefs ?? null };
 }
 
 /** 按订阅者偏好过滤事件：赛事取交集，角色取并集；全站级通知不受赛事筛选影响。 */
@@ -445,7 +453,8 @@ export async function personalCalendarUrl(env: Env, email: string): Promise<stri
   const base = getConfig(env).baseUrl;
   if (!base || !email) return "";
   const token = await signEmailToken(env.UNSUB_SECRET, email, "cal", CAL_TTL_DAYS);
-  if (!token) return `${base}/calendar.ics`;
+  // 没有签名密钥就不生成链接：宁可让用户看不到入口，也不发一个无效地址
+  if (!token) return "";
   return `${base}/calendar.ics?email=${encodeURIComponent(email.toLowerCase())}&token=${token}`;
 }
 
@@ -464,7 +473,7 @@ export async function handleArchive(req: Request, env: Env): Promise<Response> {
     }</p>
 <p class="tip">
   <a href="/feed.xml">RSS 订阅（/feed.xml）</a> ·
-  <a href="/calendar.ics">日历订阅（/calendar.ics）</a> ·
+  <a href="/">控制台领取个人日历</a> ·
   ${scope ? '<a href="/archive">查看全部</a> · ' : ''}<a href="/">返回首页</a>
 </p>`;
     const list = notices.length
@@ -589,18 +598,31 @@ function scheduleEntries(s: ContestSchedule): Array<{ date: string; label: strin
 
 export async function handleCalendar(req: Request, env: Env): Promise<Response> {
   const url = new URL(req.url);
+  const ident = await calendarIdentity(env, url);
+  if (!ident) {
+    // 公共日历已下线：只有控制台 / 邮件签发的个人链接可用
+    return new Response(
+      '日历需要个人订阅地址。请登录控制台复制「我的日历」链接后再订阅。\n',
+      {
+        status: 401,
+        headers: {
+          ...securityHeaders(),
+          'Content-Type': 'text/plain;charset=utf-8',
+          'Cache-Control': 'no-store',
+          'X-Robots-Tag': 'noindex, nofollow',
+        },
+      },
+    );
+  }
   const headers = cacheableHeaders('text/calendar;charset=utf-8', {
     'Content-Disposition': 'inline; filename="yds-notices.ics"',
+    // 个人日历只允许浏览器 / 客户端私有缓存，避免中间代理串号
+    'Cache-Control': 'private, max-age=300',
+    'X-Robots-Tag': 'noindex, nofollow',
   });
   try {
     const cfg = getConfig(env);
-    const prefs = await prefsFromUrl(env, url);
-    if (prefs) {
-      // 个人日历是「按人过滤」的内容：只允许浏览器 / 客户端私有缓存，
-      // 不让中间代理共享缓存后把别人的日程串给别人。
-      headers['Cache-Control'] = 'private, max-age=300';
-      headers['X-Robots-Tag'] = 'noindex, nofollow';
-    }
+    const prefs = ident.prefs;
     const notices = applyPrefs(filterByUrl(await loadNotices(env), url), prefs);
     const scopedContest = (url.searchParams.get('contest') || '').trim();
     const scopedAudience = (url.searchParams.get('audience') || '').trim();
