@@ -11,6 +11,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import smtplib
 import ssl
 import time
@@ -23,12 +24,25 @@ from .fetch import UA
 
 log = logging.getLogger("yds")
 
+UNOFFICIAL_TAG = "[非官方]"
+
+
+def unofficial_sender_name(name: str) -> str:
+    """发件人显示名统一带 [非官方]，与 Worker 端 unofficialSenderName 同规则。
+
+    收件箱里只显示名字，这是收件人唯一能一眼分辨「不是组委会」的位置。
+    幂等：配置里已经写了 [非官方] 也不会重复叠加。
+    """
+    base = re.sub(r"\[非官方\]", "", name or "").strip()
+    return f"{base or '研电赛通知'} {UNOFFICIAL_TAG}"
+
 
 class BaseSender:
     provider = "base"
 
     def __init__(self, sender_name: str, sender_email: str, reply_to: str = ""):
-        self.sender_name = sender_name
+        # 在基类统一加后缀：Resend / SMTP / 以后新增的通道都自动带上
+        self.sender_name = unofficial_sender_name(sender_name)
         self.sender_email = sender_email
         self.reply_to = reply_to
 

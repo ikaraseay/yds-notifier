@@ -286,7 +286,7 @@ export async function handleConfirm(url: URL, env: Env): Promise<Response> {
       `之后可以在控制台挑选栏目、改成日报 / 周报，或暂停一段时间。`,
     extraHtml:
       `<a class="btn-secondary" href="/dashboard">打开控制台</a>` +
-      `<div class="tip" style="margin-top:16px">也可以订阅 ` +
+      `<div class="tip tip--last">也可以订阅 ` +
       `<a href="/feed.xml">RSS</a>；个人日历在控制台复制，按你的角色与赛事过滤。</div>`,
   });
 }

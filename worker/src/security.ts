@@ -114,8 +114,10 @@ export function securityHeaders(): Record<string, string> {
 }
 
 export function csp(nonce: string, allowScript: boolean): string {
+  // img-src 只为站点图标放开 self：默认 default-src 'none' 会把 /favicon.svg 也拦掉，
+  // 那样控制台只是把「404」换成「被 CSP 阻止」，问题没解决。
   const base =
-    `default-src 'none'; style-src 'nonce-${nonce}'; ` +
+    `default-src 'none'; style-src 'nonce-${nonce}'; img-src 'self'; ` +
     `base-uri 'none'; form-action 'self'; frame-ancestors 'none'`;
   return allowScript
     ? `${base}; script-src 'nonce-${nonce}'; connect-src 'self'`

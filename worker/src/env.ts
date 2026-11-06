@@ -9,6 +9,8 @@
  * 对外地址、退订链接、订阅名单地址全部自动派生。
  */
 
+import { unofficialSenderName } from "./static";
+
 export interface Env {
   // ---------- Secrets ----------
   UNSUB_SECRET: string;
@@ -112,8 +114,9 @@ export function getConfig(env: Env): Config {
     if (o) origins.add(o);
   }
 
+  // 显示名固定带 [非官方]：收件箱里只显示名字，这是唯一能一眼区分官方的位置
   const mailFrom = env.MAIL_FROM_ADDRESS
-    ? `${env.MAIL_FROM_NAME || "研电赛通知"} <${env.MAIL_FROM_ADDRESS}>`
+    ? `${unofficialSenderName(env.MAIL_FROM_NAME || "研电赛通知")} <${env.MAIL_FROM_ADDRESS}>`
     : env.MAIL_FROM || "";
 
   return {

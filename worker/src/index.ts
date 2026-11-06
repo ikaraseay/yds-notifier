@@ -33,6 +33,8 @@ import {
 import { handleUnsubscribe } from "./handlers/unsubscribe";
 import { handleResendWebhook } from "./handlers/webhook";
 import { methodNotAllowed } from "./security";
+import { llmsResponse, robotsResponse, ISSUES_URL } from "./static";
+import { faviconResponse } from "./ui/icons";
 import { redirect } from "./ui/layout";
 import { dashboardPage, loginPage, messagePage } from "./ui/pages";
 
@@ -51,6 +53,22 @@ export default {
       if (p === "/health") {
         if (m !== "GET" && m !== "HEAD") return methodNotAllowed("GET, HEAD");
         return health();
+      }
+
+      // 站点图标：没有它会退化成 /favicon.ico 的 404，控制台留一条红色报错
+      if (p === "/favicon.ico" || p === "/favicon.svg") {
+        if (m !== "GET" && m !== "HEAD") return methodNotAllowed("GET, HEAD");
+        return faviconResponse();
+      }
+
+      // 爬虫与 AI 代理的入口说明，内容见 src/static.ts
+      if (p === "/robots.txt") {
+        if (m !== "GET" && m !== "HEAD") return methodNotAllowed("GET, HEAD");
+        return robotsResponse();
+      }
+      if (p === "/llms.txt") {
+        if (m !== "GET" && m !== "HEAD") return methodNotAllowed("GET, HEAD");
+        return llmsResponse(cfg.baseUrl);
       }
 
       // ---- 公开内容：归档 / RSS / 日历 ----------------------------------
@@ -153,9 +171,12 @@ export default {
 
       return messagePage({
         title: "页面不存在",
-        heading: "页面不存在",
-        bodyHtml: "你要找的页面不在这里。",
-        extraHtml: `<a class="btn-secondary" href="/">返回首页</a>`,
+        heading: "这个地址<em>没有页面</em>",
+        bodyHtml: "可能是链接已经过期，或者地址少打了一个字符。",
+        extraHtml:
+          `<a class="btn-secondary" href="/">返回首页</a>` +
+          `<div class="tip tip--tight">如果是从我们的邮件或页面点进来的，欢迎` +
+          ` <a href="${ISSUES_URL}" rel="noopener">报个错误</a>，附上这个地址就行。</div>`,
         status: 404,
       });
     } catch (err) {
@@ -163,8 +184,12 @@ export default {
       console.error("worker error", err);
       return messagePage({
         title: "出错了",
-        heading: "服务暂时不可用",
-        bodyHtml: "请稍后重试。若持续出现，请联系站点管理员。",
+        heading: "服务<em>暂时不可用</em>",
+        bodyHtml: "请过几分钟再试一次。",
+        extraHtml:
+          `<a class="btn-secondary" href="/">返回首页</a>` +
+          `<div class="tip tip--tight">一直打不开？欢迎` +
+          ` <a href="${ISSUES_URL}" rel="noopener">提一个 issue</a>，说明时间和操作步骤就好。</div>`,
         status: 500,
       });
     }

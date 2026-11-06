@@ -6,6 +6,7 @@
  */
 
 import type { ContestSchedule, Notice } from '../../feed/types';
+import { ISSUES_URL } from '../../static';
 import { buildCalendarEvents, renderCalendar } from './calendar';
 import { archiveHref, archiveLink, chip, toggle } from './common';
 import { archivePage } from './layout';
@@ -148,7 +149,8 @@ export function renderArchive({ notices, schedule, generatedAt, url }: ArchiveDa
   </div>
 
   <footer class="footer">
-    数据来自研创网与中国电子学会官网，请以官方原文为准
+    标题错漏、赛事缺失，或者想加一个赛事？
+    <a href="${ISSUES_URL}" target="_blank" rel="noopener noreferrer">反馈给我们</a>
   </footer>
 </div>`;
 

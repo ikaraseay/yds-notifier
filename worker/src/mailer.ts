@@ -85,7 +85,7 @@ export function mailShell(
            style="background:${YELLOW};border:3px solid ${INK};border-radius:8px;padding:24px;">
       <tr>
         <td valign="top">
-          <div style="font-size:12px;color:${INK};letter-spacing:1px;font-weight:700;">YAN DIAN SAI · NOTICE</div>
+          <div style="font-size:12px;color:${INK};letter-spacing:1px;font-weight:700;">研电赛 · 非官方通知</div>
           <div style="padding:10px 0 0;font-size:24px;font-weight:800;color:${INK};line-height:32px;">${esc(title)}</div>
         </td>
         <td align="right" valign="top" style="white-space:nowrap;">
@@ -134,7 +134,8 @@ export function mailShell(
 
   <!-- 页脚，与批量通知邮件保持一致 -->
   <tr><td align="center" style="padding:24px 0 0;font-size:11px;color:#8a90a2;line-height:19px;">
-    本邮件由「${esc(siteName)}」自动推送 · 请勿直接回复
+    非官方项目「${esc(siteName)}」自动推送 · 请勿直接回复<br>
+    关键时间节点请以组委会公告为准
   </td></tr>
   <tr><td align="center" style="padding:10px 0 0;font-size:11px;color:#6b6572;">
     —— 祝顺利，赛场见 ——
