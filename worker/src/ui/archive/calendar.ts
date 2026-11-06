@@ -42,14 +42,17 @@ export function buildCalendarEvents(notices: Notice[], schedule: ContestSchedule
 
   for (const n of notices) {
     const source = shortSource(n.source);
+    // 只收「有真实日期的节点」：AI 抽出的多日程，或确定性规则抽到的 deadline。
+    // 绝不回落到发布日期——那正是当初「日历只显示发布日期」的老 bug，
+    // 而且会让每个普通动态都在发布当天多出一个假日程，把月历糊满。
     const events = (n.aiEvents || []).length
       ? n.aiEvents!.map((e) => ({
           date: e.date,
           label: e.label || (e.kind === 'deadline' ? '截止' : '日程'),
           deadline: e.kind === 'deadline',
         }))
-      : n.deadline || n.date
-        ? [{ date: n.deadline || n.date, label: n.deadline ? '截止' : '日程', deadline: Boolean(n.deadline) }]
+      : n.deadline
+        ? [{ date: n.deadline, label: '截止', deadline: true }]
         : [];
     for (const e of events) {
       if (!isDay(e.date)) continue;

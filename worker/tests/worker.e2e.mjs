@@ -1119,5 +1119,31 @@ const check = (name, cond, extra = "") => {
   r = await call("/archive?contest=" + encodeURIComponent("<script>alert(1)</script>"));
   check("筛选参数被转义", !r.text.includes("<script>alert(1)</script>"));
 
+  console.log("\n[38] 日历只收真实日期（不占用发布日期）");
+
+  // 一条只有发布日、没有任何事件/截止的「动态」，不该在发布当天占一个假日程；
+  // 只有 deadline 的公告仍应作为「截止」出现。
+  await call("/api/notices", {
+    method: "POST",
+    body: JSON.stringify({
+      notices: [
+        {
+          uid: "n1", title: "纯动态：决赛现场花絮", url: "https://cpipc.acge.org.cn/x/n1",
+          date: "2026-11-09", category: "赛事动态", source: "研创网", summary: "花絮", deadline: "",
+        },
+        {
+          uid: "n2", title: "只有截止日的通知", url: "https://cpipc.acge.org.cn/x/n2",
+          date: "2026-11-02", category: "报名参赛", source: "研创网", summary: "", deadline: "2026-11-10",
+        },
+      ],
+      schedule: [],
+    }),
+    headers: { Authorization: "Bearer admin-secret" },
+  });
+  r = await call("/archive?view=cal&m=2026-11");
+  check("无日期动态不占发布日", !r.text.includes('id="d-2026-11-09"'));
+  check("只有截止日的通知以截止进日历",
+    r.text.includes('id="d-2026-11-10"') && r.text.includes("<b>截止</b>"));
+
   console.log(`\n结果：${pass} 项通过${process.exitCode ? "，存在失败" : "，全部通过"}`);
 })();
