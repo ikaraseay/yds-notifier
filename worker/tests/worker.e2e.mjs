@@ -1019,9 +1019,10 @@ const check = (name, cond, extra = "") => {
   check("退订 token 不能读个人日历", r.status === 401, String(r.status));
 
   // 签名被篡改 → 同样 401，不泄露任何日程
-  r = await call(
-    `/calendar.ics?email=${encodeURIComponent(pEmail)}&token=${emailToken(pEmail, "cal").slice(0, -1)}0`,
-  );
+  // 注意：不能直接改末位为 "0"——真签名末位本来就是 0 时等于没改，会误判成 200
+  const goodCalToken = emailToken(pEmail, "cal");
+  const tamperedToken = goodCalToken.slice(0, -1) + (goodCalToken.endsWith("0") ? "1" : "0");
+  r = await call(`/calendar.ics?email=${encodeURIComponent(pEmail)}&token=${tamperedToken}`);
   check("篡改签名 401", r.status === 401, String(r.status));
 
   // 控制台给出个人日历地址
