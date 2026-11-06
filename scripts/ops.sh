@@ -150,7 +150,6 @@ cmd_dev_vars() {
     printf 'MAX_PER_IP_HOUR="%s"\n' "${MAX_PER_IP_HOUR:-10}"
     printf 'MAX_CONFIRM_PER_DAY="%s"\n' "${MAX_CONFIRM_PER_DAY:-200}"
     printf 'LIST_RATE_PER_HOUR="%s"\n' "${LIST_RATE_PER_HOUR:-60}"
-    printf 'DOUBLE_OPT_IN="%s"\n' "${DOUBLE_OPT_IN:-true}"
   } > "$DEV_VARS"
   ok "已写入 $DEV_VARS"
   note "该文件已被 .gitignore 忽略；线上配置用 ops.sh secrets"
