@@ -213,6 +213,32 @@ class Notice:
         delta = (target - _date.today()).days
         return delta if delta >= 0 else None
 
+    @property
+    def is_expired(self) -> bool:
+        """所有已知时间节点都已过去 → 已结束，不再写进邮件。
+
+        「公示」「获奖」这类通知常带未来节点（反馈异议截止、证书下载），
+        只要还剩一个未来日期就保留；一个日期都抽不到的，按发布日兜底，
+        超过 30 天的视为旧闻。历史归档 / RSS 不受影响，只影响发信。
+        """
+        today = date.today()
+        parsed: List[date] = []
+        for raw in self.event_dates:
+            text = str(raw or "").strip()
+            if not text:
+                continue
+            try:
+                parsed.append(date.fromisoformat(text[:10]))
+            except ValueError:
+                got = parse_cn_date(text)
+                if got:
+                    parsed.append(got)
+        if parsed:
+            return max(parsed) < today
+        if self.published:
+            return (today - self.published).days > 30
+        return False
+
 
 def make_uid(source_key: str, ident: str) -> str:
     """生成稳定去重键。
