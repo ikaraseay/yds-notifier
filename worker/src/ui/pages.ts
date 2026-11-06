@@ -5,6 +5,15 @@ import { esc } from "../security";
 import { page } from "./layout";
 import { LOGIN_SCRIPT, PREFS_SCRIPT } from "./scripts";
 
+/**
+ * 设置改动的暂存窗口：改动先落本机，5 分钟后才写 KV。
+ *
+ * 每次保存 = 2 写 + 1 删，而免费额度是 1000 写 / 1000 删每天，且与发布链路
+ * （/api/notices）共用。用户连续勾选赛事属于典型抖动，逐次落库会把额度耗在
+ * 无意义的重复写上，极端情况下挤掉归档同步。前端脚本读这个值，只改这一处。
+ */
+export const PREFS_APPLY_DELAY_MS = 5 * 60 * 1000;
+
 export function loginPage(site: string, count: number, deleted = false): Response {
   return page({
     title: site,
@@ -83,7 +92,7 @@ export function dashboardPage(user: User, calendarUrl = ""): Response {
     title: "控制台",
     heading: "通知<em>设置</em>",
     body: `
-      <p class="sub">先选你的角色和关注的赛事，再挑栏目。改动即时保存，推送时只发勾中的内容。</p>
+      <p class="sub">先选你的角色和关注的赛事，再挑栏目。改动会先记在本机，${Math.round(PREFS_APPLY_DELAY_MS / 60000)} 分钟内自动保存——连续调整只写一次。</p>
       <div class="who" id="who">
         <span>${esc(user.email)}</span>
         <a href="#" id="logout">退出登录</a>
@@ -92,7 +101,7 @@ export function dashboardPage(user: User, calendarUrl = ""): Response {
         还差一步：我们给 <b>${esc(user.email)}</b> 发了一封确认邮件，点里面的链接才会开始收通知。
         <button type="button" id="resend" class="btn-secondary" style="margin-top:10px">重新发送确认邮件</button>
       </div>` : ""}
-      <div id="settings">
+      <div id="settings" data-email="${esc(user.email)}" data-apply-delay="${PREFS_APPLY_DELAY_MS}">
         <div class="section" style="margin-top:22px;border-top:0;padding-top:0">
           <h2>我的角色</h2>
           <p class="sub" style="font-size:12px;margin:0 0 10px">
@@ -139,6 +148,10 @@ export function dashboardPage(user: User, calendarUrl = ""): Response {
         <button type="button" id="clearPause" class="btn-secondary" style="margin-top:10px">清除暂停</button>
       </div>
       <div id="msg" role="status" aria-live="polite"></div>
+      <div id="applybar" class="applybar" aria-live="polite">
+        <span id="applytext">有改动待保存</span>
+        <button type="button" id="applyNow" class="btn-mini">立即生效</button>
+      </div>
       <div class="section">
         <h2>我的日历</h2>
         <p class="sub" style="font-size:12px;margin:0 0 10px">

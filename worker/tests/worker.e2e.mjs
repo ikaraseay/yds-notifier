@@ -15,6 +15,7 @@ class MockKV {
     this.map = new Map();
     this.writes = 0;
     this.reads = 0;
+    this.deletes = 0;
   }
   async get(k) {
     this.reads++;
@@ -25,6 +26,7 @@ class MockKV {
     this.map.set(k, v);
   }
   async delete(k) {
+    this.deletes++;
     this.map.delete(k);
   }
   async list({ prefix = "", limit = 1000 } = {}) {
@@ -898,6 +900,39 @@ const check = (name, cond, extra = "") => {
   check("角色落 KV", saved3.prefs.audiences.advisor === true && saved3.prefs.audiences.organizer === false);
   check("赛事落 KV", saved3.prefs.contests.includes("电子设计竞赛"));
 
+  // KV 免费额度是 1000 写 / 1000 删每天，且与 /api/notices 的发布共用。
+  // 反复保存同一份设置必须零写入，否则用户勾几下就能把归档同步挤掉。
+  let w0 = env.SUBS.writes, d0 = env.SUBS.deletes;
+  r = await call("/api/prefs", {
+    method: "POST",
+    body: JSON.stringify({
+      audiences: { student: true, advisor: true, admin: false, organizer: false },
+      contests: ["电子设计竞赛", "人工智能创新大赛"],
+      frequency: "daily",
+    }),
+    headers: { Cookie: `yds_sid=${freshSid}` },
+  });
+  const pjSame = JSON.parse(r.text);
+  check("重复保存标记 unchanged", pjSame.ok === true && pjSame.unchanged === true, r.text);
+  check("重复保存零 KV 写入 / 零删除",
+    env.SUBS.writes === w0 && env.SUBS.deletes === d0,
+    `writes +${env.SUBS.writes - w0} deletes +${env.SUBS.deletes - d0}`);
+
+  w0 = env.SUBS.writes; d0 = env.SUBS.deletes;
+  r = await call("/api/prefs", {
+    method: "POST",
+    body: JSON.stringify({ frequency: "weekly" }),
+    headers: { Cookie: `yds_sid=${freshSid}` },
+  });
+  check("真实改动 = 2 写 + 1 删（user/sub/索引失效）",
+    env.SUBS.writes - w0 === 2 && env.SUBS.deletes - d0 === 1,
+    `writes +${env.SUBS.writes - w0} deletes +${env.SUBS.deletes - d0}`);
+  await call("/api/prefs", {
+    method: "POST",
+    body: JSON.stringify({ frequency: "daily" }),
+    headers: { Cookie: `yds_sid=${freshSid}` },
+  });
+
   r = await call("/api/prefs", {
     method: "POST",
     body: JSON.stringify({ audiences: ["student"], contests: ["不存在的比赛", "电子设计竞赛"] }),
@@ -925,6 +960,9 @@ const check = (name, cond, extra = "") => {
   check("控制台含「关注的赛事」", r.text.includes("关注的赛事"));
   check("控制台列出全部赛事", r.text.includes("智能建造创新大赛") && r.text.includes("数学建模竞赛"));
   check("控制台有快捷选择", r.text.includes("只选研电赛") && r.text.includes("全选"));
+  check("控制台带 5 分钟暂存窗口", r.text.includes('data-apply-delay="300000"'), r.text.slice(0, 120));
+  check("控制台有立即生效入口", r.text.includes('id="applyNow"') && r.text.includes("立即生效"));
+  check("控制台说明改动延迟生效", r.text.includes("5 分钟内自动保存"));
   check("赛事勾选可提交", r.text.includes('name="contest" value="电子设计竞赛"'));
 
   r = await call("/api/list", { headers: { Authorization: "Bearer admin-secret" } });

@@ -9,6 +9,7 @@ import {
   getSub,
   getUser,
   isConfirmed,
+  normalizePrefs,
   prefsFromBody,
   putSub,
   putUser,
@@ -38,7 +39,15 @@ export async function handlePrefs(req: Request, env: Env): Promise<Response> {
   if (!user) return jsonResp({ ok: false, login: true, message: "账号不存在" }, 401);
 
   const body = await req.json().catch(() => ({}));
-  user.prefs = prefsFromBody(body, user.prefs);
+  const next = prefsFromBody(body, user.prefs);
+  // 幂等短路：内容没变就不写。
+  // 每次保存要写 user: + sub: 并删 subs:index，共 2 写 + 1 删；KV 免费额度是
+  // 1000 写/1000 删每天，且与 /api/notices 的发布共用。反复点同一个选项若都落盘，
+  // 会把额度消耗在无意义的重复写上，最终挤掉归档同步。
+  if (JSON.stringify(normalizePrefs(next)) === JSON.stringify(normalizePrefs(user.prefs))) {
+    return jsonResp({ ok: true, prefs: user.prefs, unchanged: true });
+  }
+  user.prefs = next;
   await putUser(env.SUBS, user);
   // sub: 里冗余一份偏好，/api/list 无需再读 user:，也避免两处不一致
   const sub = await getSub(env.SUBS, email);
