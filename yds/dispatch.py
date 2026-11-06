@@ -70,8 +70,8 @@ def _send_one(
         subject = f"〔{AUDIENCE_NAMES.get(persona, persona)}〕{subject}"
     base = (settings.public_base_url or "").rstrip("/")
     public_cal = f"{base}/calendar.ics" if base else ""
-    # 个人日历：签名绑定邮箱，Worker 端据此按该用户的角色 / 赛事偏好过滤事件。
-    # 签发失败（没配 secret）时退回公开日历，绝不发无签名链接冒充个人版。
+    # 公共日历已下线：只发签名绑定邮箱的个人日历。
+    # 拿不到签名（没配 secret）就干脆不放日历链接，避免给出一个 401 的地址。
     personal_cal = (
         build_calendar_url(public_cal, settings.unsub_secret, rcpt.email)
         if public_cal and settings.unsub_secret else ""
@@ -84,7 +84,7 @@ def _send_one(
         issue_url=f"{repo_url}/issues" if repo_url else "",
         compact_low=compact_low,
         persona=persona,
-        calendar_url=personal_cal or public_cal,
+        calendar_url=personal_cal,
         archive_url=f"{base}/archive" if base else "",
     )
     text_body = build_text(mine, site=settings.site_name, unsubscribe_url=unsub_for)

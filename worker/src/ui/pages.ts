@@ -26,8 +26,8 @@ export function loginPage(site: string, count: number, deleted = false): Respons
       登录链接 15 分钟内有效、只能用一次。
     </div>
     <div class="tip" style="margin-top:12px">
-      也能用 <a href="/archive">通知归档</a> · <a href="/feed.xml">RSS</a> ·
-      <a href="/calendar.ics">日历订阅</a> 查看全部通知，不必注册。
+      也能用 <a href="/archive">通知归档</a> · <a href="/feed.xml">RSS</a> 查看通知；
+      日历按个人订阅生成，登录控制台后即可领取自己的日历地址。
     </div>`,
     script: LOGIN_SCRIPT,
   });
@@ -142,16 +142,17 @@ export function dashboardPage(user: User, calendarUrl = ""): Response {
       <div class="section">
         <h2>我的日历</h2>
         <p class="sub" style="font-size:12px;margin:0 0 10px">
-          这个地址只包含你勾选的角色与赛事，粘到手机 / Outlook 的「订阅日历」里即可，
-          改设置后自动同步。
+          只包含你勾选的角色与赛事，粘到手机 / Outlook 的「订阅日历」里即可，
+          改设置后自动同步。公共日历已下线，其他人拿到你的地址也改不了内容。
         </p>
-        <input type="text" id="calUrl" class="field" readonly
-               value="${esc(calendarUrl || "/calendar.ics")}" aria-label="我的日历地址">
-        <button type="button" id="copyCal" class="btn-secondary" style="margin-top:10px">复制日历地址</button>
+        ${calendarUrl ? `<input type="text" id="calUrl" class="field" readonly
+               value="${esc(calendarUrl)}" aria-label="我的日历地址">
+        <button type="button" id="copyCal" class="btn-secondary" style="margin-top:10px">复制日历地址</button>`
+        : `<p class="sub" style="font-size:12px">日历签名未配置，暂时无法生成个人地址。</p>`}
       </div>
       <div class="tip" style="margin-top:16px">
-        <a href="/archive">通知归档</a> · <a href="/feed.xml">RSS 订阅</a> ·
-        <a href="${esc(calendarUrl || "/calendar.ics")}">加入日历</a>
+        <a href="/archive">通知归档</a> · <a href="/feed.xml">RSS 订阅</a>${calendarUrl
+          ? ` · <a href="${esc(calendarUrl)}">加入日历</a>` : ""}
       </div>
       <div class="danger">
         <h2>注销账户</h2>
