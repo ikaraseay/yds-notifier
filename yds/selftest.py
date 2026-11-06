@@ -27,9 +27,9 @@ from .ai.client import AiClient, AiClientError, AiConfig
 from .ai.prompts import load_examples, load_prompt, load_schema, render, user_payload
 from .ai.schema import CATEGORIES, input_hash, parse_evidence_date, validate_response
 from .config import derive_base_url, derive_internal_base, settings
-from .mailer import build_html, build_subject, build_text
+from .mailer import build_html, build_subject, build_text, sort_notices
 from .lock import RunLock
-from .models import Attachment, Notice
+from .models import Attachment, Notice, by_recency
 from .personas import (
     AUDIENCES,
     CONTEST_IDS,
@@ -262,6 +262,28 @@ def main() -> int:
     fresh_note = _notice("没有日期的新通知", uid="e4")
     fresh_note.published = date.today() - timedelta(days=2)
     check("近期无日期通知保留", fresh_note.is_expired is False)
+
+    print("\n[9d] 追赶 / 基线截断按发布时间挑最近 N 条")
+    # 回归守卫：2026-11-06 实发事故——追赶模式按重要度截断，把 9 月的
+    # 决赛 / 截止类高权重旧文顶进了邮件。截断必须按时间，展示才按重要度。
+    new_low = _notice("报名缴费截止通知", uid="c1", audiences=["student"])
+    new_low.published = date.today() - timedelta(days=1)
+    old_high = _notice("决赛结果公示", uid="c2", audiences=["student"])
+    old_high.published = date.today() - timedelta(days=50)
+    mid = _notice("评审名单", uid="c3", audiences=["student"])
+    mid.published = date.today() - timedelta(days=5)
+    picked = sort_notices(by_recency([new_low, old_high, mid])[:2])
+    titles = [n.title for n in picked]
+    check("截断挑最近两条", set(titles) == {new_low.title, mid.title}, str(titles))
+    check("陈年旧文被截掉", old_high.title not in titles)
+    check("展示顺序按重要度", titles[0] == new_low.title, str(titles))
+    nod = _notice("无日期通知", uid="c4")
+    check("无日期通知垫底", by_recency([nod, new_low])[0] is new_low)
+    # 静态守卫：超龄条目也要标已读，否则每轮重复判「新增后跳过」，
+    # 将来放宽 push_max_age_days 时还会瞬间涌入邮件。
+    src_main = (Path(__file__).with_name("main.py")).read_text(encoding="utf-8")
+    check("超龄条目标已读的代码在位", "state.mark(stale_items)" in src_main)
+    check("无新公告分支会保存超龄标记", "stale_marked" in src_main)
 
     print("\n[10] 归档同步不会被「无新公告」提前返回跳过")
     # 回归守卫：同步曾写在 `if not fresh: return 0` 之后，导致没有新公告时

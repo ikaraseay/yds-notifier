@@ -31,7 +31,7 @@ from .config import settings
 from .dispatch import dispatch
 from .lock import RunLock
 from .mailer import build_html, build_text, sort_notices
-from .models import Notice
+from .models import Notice, by_recency
 from .publish import (
     apply_analysis,
     build_payload,
@@ -380,10 +380,13 @@ def main(argv: List[str] | None = None) -> int:
     max_age = max(7, int(cfg.get("push_max_age_days", cfg.get("max_age_days", 60))))
     cutoff = today_date - timedelta(days=max_age)
     stale_skipped = 0
+    stale_items: List[Notice] = []
+    stale_marked = False
     for n in meta:
         kind = "new" if first_run else state.classify(n)
         if kind == "new" and n.published and n.published < cutoff:
             stale_skipped += 1
+            stale_items.append(n)
             continue
         if kind in ("new", "changed"):
             n.change_kind = kind
@@ -392,6 +395,11 @@ def main(argv: List[str] | None = None) -> int:
                 changed_uids.add(n.uid)
     if stale_skipped:
         log.info("跳过 %s 条超过 %s 天的历史条目（仍会归档，不推送）", stale_skipped, max_age)
+        if writes_state and stale_items:
+            # 超龄条目也标已读：不标的话每轮都会重新判一遍「新增后被跳过」，
+            # 而且未来一旦放宽 push_max_age_days，这些条目会瞬间涌入邮件。
+            state.mark(stale_items)
+            stale_marked = True
 
     # --- 每日一次详情抽检：发现同一文章 ID 下的正文 / 附件修订 ---------------
     today = date.today().isoformat()
@@ -542,8 +550,8 @@ def main(argv: List[str] | None = None) -> int:
         return 0
 
     if not merged and not args.preview and not reminders:
-        # 没有新内容：只在抽检刷新过指纹或归档有更新时才落盘，避免每 10 分钟产生一次 git 提交
-        if full_check or archive_changed:
+        # 没有新内容：只在抽检刷新过指纹 / 归档有更新 / 刚标了超龄条目时落盘
+        if full_check or archive_changed or stale_marked:
             state.save()
         else:
             log.info("无新公告，结束（未抓取详情页推送）")
@@ -558,19 +566,23 @@ def main(argv: List[str] | None = None) -> int:
         state.mark(expired)
         fresh = [n for n in fresh if not n.is_expired]
     catchup_dropped = 0
+    # 追赶 / 基线截断按「发布时间」挑最近 N 条，再按重要度排展示顺序。
+    # 只按重要度截断会把陈年旧文（决赛、截止等高权重条目）顶进邮件——
+    # 2026-11-06 的实发事故就是这么发生的。
     if first_run and cfg.get("on_first_run", "baseline") == "baseline":
-        fresh = fresh[: int(cfg.get("baseline_size", 8))]
+        size = int(cfg.get("baseline_size", 8))
+        fresh = sort_notices(by_recency(fresh)[:size])
         log.info("首次运行，建立基线（%s 条），本轮推送最近 %s 条", len(meta), len(fresh))
     elif len(fresh) > int(cfg.get("catchup_threshold", 15)):
         # 扩充数据源 / 长时间停摆后，单轮会出现几十条「新条目」。
-        # 一次性全发既吵又容易进垃圾箱：只推最近 N 条，其余静默归档。
+        # 一次性全发既吵又容易进垃圾箱：只推最近 N 条（按发布时间），其余静默归档。
         size = max(1, int(cfg.get("catchup_size", 8)))
         catchup_dropped = max(0, len(fresh) - size)
         log.info(
-            "单轮新增 %s 条超过阈值 %s，按追赶模式只推最近 %s 条，其余 %s 条静默归档",
+            "单轮新增 %s 条超过阈值 %s，按追赶模式只推最近 %s 条（按发布时间），其余 %s 条静默归档",
             len(fresh), cfg.get("catchup_threshold", 15), size, catchup_dropped,
         )
-        fresh = fresh[:size]
+        fresh = sort_notices(by_recency(fresh)[:size])
 
     if args.preview:
         preview_email = (split_recipients(static_to) or [""])[0]
