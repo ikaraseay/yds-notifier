@@ -18,7 +18,7 @@ from typing import Dict, List, Sequence
 from .config import settings
 from .mailer import build_html, build_subject, build_text, sort_notices
 from .models import Notice
-from .personas import DEADLINE_STAGES
+from .personas import AUDIENCE_NAMES, DEADLINE_STAGES, primary_audience
 from .recipients import Recipient
 from .senders import BaseSender
 from .state import load_pending, pending_notices, save_pending
@@ -61,7 +61,14 @@ def _send_one(
         build_unsubscribe_url(settings.unsub_url, settings.unsub_secret, rcpt.email)
         if unsub_ready else ""
     )
-    persona = next(iter(rcpt.audiences), "") if rcpt.audiences else ""
+    # 只订阅单一角色时发该角色专版（按赛事分组 + 赛事日历链接）；
+    # 订阅多个角色时发综合版，邮件内仍按角色分区。
+    auds = rcpt.audiences or frozenset()
+    persona = primary_audience(auds) if len(auds) == 1 else ""
+    if persona:
+        # 角色版邮件在主题上直接标出来，收件人一眼知道这是哪一版
+        subject = f"〔{AUDIENCE_NAMES.get(persona, persona)}〕{subject}"
+    base = (settings.public_base_url or "").rstrip("/")
     html_body = build_html(
         mine,
         site=settings.site_name,
@@ -70,6 +77,8 @@ def _send_one(
         issue_url=f"{repo_url}/issues" if repo_url else "",
         compact_low=compact_low,
         persona=persona,
+        calendar_url=f"{base}/calendar.ics" if base else "",
+        archive_url=f"{base}/archive" if base else "",
     )
     text_body = build_text(mine, site=settings.site_name, unsubscribe_url=unsub_for)
     sender.send(

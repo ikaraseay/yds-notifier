@@ -26,10 +26,24 @@ from .ai.schema import CATEGORIES, input_hash, parse_evidence_date, validate_res
 from .config import derive_base_url, derive_internal_base, settings
 from .mailer import build_html, build_subject, build_text
 from .models import Attachment, Notice
-from .personas import AUDIENCES, STAGES, infer_audiences, infer_contest, infer_stage
+from .personas import (
+    AUDIENCES,
+    CONTESTS,
+    STAGES,
+    infer_audiences,
+    infer_contest,
+    infer_stage,
+)
 from .publish import apply_analysis, build_payload, extract_deadline, payload_fingerprint
-from .recipients import Recipient, _valid
+from .recipients import (
+    Recipient,
+    _parse_audiences,
+    _parse_contests,
+    _valid,
+    watched_contests,
+)
 from .schedule import ContestSchedule, ReminderLog, ScheduleStore, parse_schedule
+from .sources import CpipcZonesSource, build_sources
 from .state import State, load_pending, pending_notices, save_pending
 from .unsub import build_list_unsubscribe_headers, build_unsubscribe_url, make_email_token
 
@@ -459,6 +473,69 @@ def main() -> int:
         fp = payload_fingerprint(with_sched)
         with_sched["schedule"][0]["signupEnd"] = "2026-06-27"
         check("赛程变化触发重推", payload_fingerprint(with_sched) != fp)
+
+    print("\n[18] 后台角色 / 赛事偏好与赛事专区")
+
+    auth_ts = (Path(__file__).resolve().parent.parent / "worker/src/auth.ts").read_text(encoding="utf-8")
+    ts_block = auth_ts.split("<contests>")[1].split("</contests>")[0]
+    ts_contests = re.findall(r'"([^"]+)"', ts_block)
+    check("Worker 赛事清单与 Python 一致", tuple(ts_contests) == tuple(CONTESTS),
+          f"{len(ts_contests)} vs {len(CONTESTS)}")
+
+    r1 = Recipient(
+        email="s@x.com",
+        audiences=frozenset({"student"}),
+        contests=frozenset({"电子设计竞赛"}),
+    )
+    n_edc = _notice("报名通知", uid="z1")
+    n_edc.contest = "电子设计竞赛"
+    n_ai = _notice("人工智能大赛通知", uid="z2")
+    n_ai.contest = "人工智能创新大赛"
+    n_gen = _notice("2026年度赛程一览", uid="z3")
+    n_gen.contest = ""
+    check("关注赛事命中", r1.wants_notice(n_edc))
+    check("未关注赛事被过滤", not r1.wants_notice(n_ai))
+    check("全站通知不因赛事过滤丢失", r1.wants_notice(n_gen))
+    check("角色不匹配也过滤", not Recipient(email="a@x.com", audiences=frozenset({"admin"})).wants_notice(n_edc))
+
+    check("解析 role 对象", _parse_audiences({"audiences": {"student": True, "admin": False}})
+          == frozenset({"student"}))
+    check("解析 role 数组", _parse_audiences({"audiences": ["advisor"]}) == frozenset({"advisor"}))
+    check("空赛事数组 = 全部", _parse_contests({"contests": []}) is None)
+    check("解析赛事数组", _parse_contests({"contests": ["电子设计竞赛"]})
+          == frozenset({"电子设计竞赛"}))
+    check("关注赛事并集", watched_contests([
+        Recipient(email="1@x.com", contests=frozenset({"电子设计竞赛"})),
+        Recipient(email="2@x.com", contests=frozenset({"人工智能创新大赛"})),
+    ]) == frozenset({"电子设计竞赛", "人工智能创新大赛"}))
+    check("任一不限则返回 None", watched_contests([
+        Recipient(email="3@x.com", contests=frozenset({"电子设计竞赛"})),
+        Recipient(email="4@x.com"),
+    ]) is None)
+
+    zones = CpipcZonesSource(
+        contests=["电子设计竞赛", "创“芯”大赛", "人工智能创新大赛"], per_run=2, offset=1
+    )
+    check("专区按 offset 轮询", zones.contests == ["创“芯”大赛", "人工智能创新大赛"], str(zones.contests))
+    cfg_zones = {"sources": [{
+        "key": "cpipc_zones", "enabled": True, "per_run": 4,
+        "contests": ["电子设计竞赛", "人工智能创新大赛"],
+    }]}
+    only = build_sources(cfg_zones, only_contests={"人工智能创新大赛"})
+    check("只抓订阅者关注的赛事", only and only[0].contests == ["人工智能创新大赛"],
+          str([s.contests for s in only]))
+    check("无人关注时跳过专区源", build_sources(cfg_zones, only_contests=set()) == [])
+
+    html = build_html(
+        [n_edc, n_ai],
+        persona="student",
+        calendar_url="https://x.example/calendar.ics",
+        archive_url="https://x.example/archive",
+    )
+    check("角色版按赛事分组", "电子设计竞赛" in html and "人工智能创新大赛" in html)
+    check("赛事日历链接带 contest", "calendar.ics?contest=" in html)
+    check("赛事日历链接带角色", "audience=student" in html)
+    check("赛事列表链接带 contest", "archive?contest=" in html)
 
     print(f"\n结果：{PASS} 项通过，{FAIL} 项失败")
     return 1 if FAIL else 0

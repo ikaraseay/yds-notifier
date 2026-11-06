@@ -123,7 +123,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           # 本轮无变化时 state 不会写文件，此时不应让 workflow 失败；
           # 逐个判断存在性，避免某个可选文件缺失导致整条 git add 失败
-          for f in data/seen.json data/pending.json data/ai.json data/schedule.json data/reminders.json; do
+          for f in data/seen.json data/pending.json data/ai.json data/schedule.json data/reminders.json data/zones.json; do
             [ -f "$f" ] && git add -- "$f"
           done
           if git diff --cached --quiet; then

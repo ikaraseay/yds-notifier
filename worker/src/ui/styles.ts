@@ -119,6 +119,19 @@ a{color:var(--memphis-blue);font-weight:700;text-underline-offset:3px}
 .btn-danger:active{transform:translate(4px,4px);box-shadow:0 0 0 var(--memphis-coral)}
 .section{margin-top:26px;padding-top:18px;border-top:2px dashed #d8cfc0}
 .section h2{font-size:13px;margin:0 0 8px;font-weight:800;letter-spacing:.3px}
+.row-actions{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 12px}
+.btn-mini{width:auto;margin:0;padding:7px 13px;font-size:12px;font-weight:800;
+  background:#fff;color:var(--memphis-ink);border:2px solid var(--memphis-ink);
+  border-radius:5px;box-shadow:3px 3px 0 var(--memphis-ink)}
+.btn-mini:hover{background:#FFFDF7}
+.btn-mini:active{transform:translate(3px,3px);box-shadow:0 0 0 var(--memphis-ink)}
+.contest-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.opt.compact{padding-bottom:12px}
+.opt.mini{padding:9px 10px 9px 38px;border-width:2px}
+.opt.mini .box{left:11px;width:18px;height:18px;border-width:2px}
+.opt.mini .box::after{left:4px;top:1px;width:5px;height:9px;border-width:0 2px 2px 0}
+.opt.mini .name{font-size:12px;line-height:1.45;font-weight:700}
+.opt.mini.is-on{box-shadow:3px 3px 0 var(--memphis-ink)}
 .field{width:100%;box-sizing:border-box;padding:10px 12px;font-size:13px;color:var(--memphis-ink);
   background:#fff;border:3px solid var(--memphis-ink);border-radius:6px;outline:none}
 .field:focus-visible{outline:3px solid var(--memphis-blue);outline-offset:2px}
@@ -129,5 +142,6 @@ select.field{appearance:none;background-image:none;cursor:pointer}
 @media (max-width:420px){
   .card{padding:34px 22px 26px;box-shadow:6px 6px 0 var(--memphis-ink)}
   h1{font-size:22px}
+  .contest-grid{grid-template-columns:1fr}
 }
 `;

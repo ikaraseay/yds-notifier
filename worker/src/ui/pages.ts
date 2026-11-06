@@ -1,6 +1,6 @@
 /** 界面层：具体页面（登录页、控制台、通用结果页）。 */
 
-import { CATEGORIES, type Frequency, type User } from "../auth";
+import { AUDIENCES, CATEGORIES, CONTESTS, type Frequency, type User } from "../auth";
 import { esc } from "../security";
 import { page } from "./layout";
 import { LOGIN_SCRIPT, PREFS_SCRIPT } from "./scripts";
@@ -50,6 +50,27 @@ export function dashboardPage(user: User): Response {
 </label>`;
   }).join("\n");
 
+  const audOpts = AUDIENCES.map((a) => {
+    const on = user.prefs.audiences[a.key];
+    return `<label class="opt compact${on ? " is-on" : ""}">
+  <input type="checkbox" data-aud="${esc(a.key)}"${on ? " checked" : ""}>
+  <span class="box"></span>
+  <span class="name">${esc(a.label)}</span>
+  <span class="desc">${esc(a.desc)}</span>
+</label>`;
+  }).join("\n");
+
+  const pickedContests = new Set(user.prefs.contests);
+  const contestOpts = CONTESTS.map((name) => {
+    const on = pickedContests.has(name);
+    return `<label class="opt mini${on ? " is-on" : ""}">
+  <input type="checkbox" name="contest" value="${esc(name)}"${on ? " checked" : ""}>
+  <span class="box"></span>
+  <span class="name">${esc(name)}</span>
+</label>`;
+  }).join("\n");
+  const allContests = user.prefs.contests.length === 0;
+
   const pending = user.status === "pending";
   const freqOptions = (Object.keys(FREQ_LABEL) as Frequency[])
     .map(
@@ -62,7 +83,7 @@ export function dashboardPage(user: User): Response {
     title: "控制台",
     heading: "通知<em>设置</em>",
     body: `
-      <p class="sub">勾选你关心的栏目，改动即时保存。推送时只发勾中的内容。</p>
+      <p class="sub">先选你的角色和关注的赛事，再挑栏目。改动即时保存，推送时只发勾中的内容。</p>
       <div class="who" id="who">
         <span>${esc(user.email)}</span>
         <a href="#" id="logout">退出登录</a>
@@ -71,7 +92,36 @@ export function dashboardPage(user: User): Response {
         还差一步：我们给 <b>${esc(user.email)}</b> 发了一封确认邮件，点里面的链接才会开始收通知。
         <button type="button" id="resend" class="btn-secondary" style="margin-top:10px">重新发送确认邮件</button>
       </div>` : ""}
-      <div id="opts" class="opts">${opts}</div>
+      <div id="settings">
+        <div class="section" style="margin-top:22px;border-top:0;padding-top:0">
+          <h2>我的角色</h2>
+          <p class="sub" style="font-size:12px;margin:0 0 10px">
+            每个角色看到的内容不同：学生看报名与提交，导师看评审与决赛，培养单位看审核与承办。
+            多选按并集推送。
+          </p>
+          <div id="aud-opts" class="opts">${audOpts}</div>
+        </div>
+        <div class="section">
+          <h2>关注的赛事</h2>
+          <p class="sub" style="font-size:12px;margin:0 0 10px">
+            勾选要跟踪的比赛。<strong>一个都不选 = 接收全部赛事</strong>。
+            当前：${allContests ? "全部赛事" : `${pickedContests.size} 项`}。
+          </p>
+          <div class="row-actions">
+            <button type="button" class="btn-mini" data-contest-preset="core">只选研电赛</button>
+            <button type="button" class="btn-mini" data-contest-preset="all">全选</button>
+            <button type="button" class="btn-mini" data-contest-preset="none">清空</button>
+          </div>
+          <div id="contest-opts" class="contest-grid">${contestOpts}</div>
+        </div>
+        <div class="section">
+          <h2>通知栏目</h2>
+          <p class="sub" style="font-size:12px;margin:0 0 10px">
+            栏目决定内容类型，角色决定视角，两者取交集。
+          </p>
+          <div id="opts" class="opts">${opts}</div>
+        </div>
+      </div>
       <div class="section">
         <h2>推送频率</h2>
         <p class="sub" style="font-size:12px;margin:0 0 10px">
@@ -95,7 +145,7 @@ export function dashboardPage(user: User): Response {
       </div>
       <div class="danger">
         <h2>注销账户</h2>
-        <p>删除账号、订阅记录与栏目设置，之后不再收到任何邮件。此操作不可恢复。</p>
+        <p>删除账号、订阅记录、角色与赛事设置，之后不再收到任何邮件。此操作不可恢复。</p>
         <button type="button" id="del" class="btn-danger">注销账户</button>
       </div>`,
     script: PREFS_SCRIPT,

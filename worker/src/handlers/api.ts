@@ -11,6 +11,10 @@ export interface ListedSubscriber {
   prefs: Prefs;
   frequency: string;
   pausedUntil: string;
+  /** 启用的角色 key，Actions 端直接按数组过滤 */
+  audiences: string[];
+  /** 关注的赛事名；空数组表示全部 */
+  contests: string[];
 }
 
 export async function getCount(env: Env): Promise<number> {
@@ -62,6 +66,10 @@ export async function handleList(req: Request, env: Env): Promise<Response> {
       prefs: r.prefs!,
       frequency: r.prefs!.frequency,
       pausedUntil: r.prefs!.pausedUntil,
+      audiences: Object.entries(r.prefs!.audiences)
+        .filter(([, on]) => on)
+        .map(([key]) => key),
+      contests: r.prefs!.contests,
     }));
 
   console.log(`api/list 读取 ${subscribers.length} 个订阅者`, { ip });
