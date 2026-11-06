@@ -1092,6 +1092,29 @@ const check = (name, cond, extra = "") => {
   check("日历视图含当月事件", r.text.includes("2026-11-25"));
   check("日历视图有图例", r.text.includes("截止日期") && r.text.includes("赛事活动"));
 
+  console.log("\n[37] 日历视图增强（来源 / 定位 / 月份快切）");
+
+  check("日历格显示来源与节点", r.text.includes("<b>报名截止</b>") && r.text.includes("<em>研创网</em>"),
+    r.text.slice(0, 200));
+  check("日历格可跳到当天", r.text.includes('href="#d-2026-11-25"'));
+  check("当天日程分组带锚点", r.text.includes('id="d-2026-11-25"'));
+  check("日历节点链回公告原文", r.text.includes("https://cpipc.acge.org.cn/x/p1"));
+  check("官方赛程也进日历", r.text.includes("官方赛程") && r.text.includes("<em>电子设计竞赛</em>"));
+  check("月份快选有 12 个月", (r.text.match(/class="cm[ "]/g) || []).length === 12);
+  check("月份快选可切年", r.text.includes('aria-label="上一年"') && r.text.includes('aria-label="下一年"'));
+  check("月份导航含上月下月", r.text.includes("‹ 上月") && r.text.includes("下月 ›"));
+  check("日历顶栏给出统计", r.text.includes("个节点") && r.text.includes("覆盖"));
+  check("移除刷新列表按钮", !r.text.includes("刷新列表"));
+
+  r = await call("/archive?view=cal&m=2026-12");
+  check("切月显示该月赛程", r.text.includes("2026 年 12 月") && r.text.includes("决赛开始"));
+
+  // 筛选条件在翻月时必须保留，否则用户每翻一次就要重选赛事
+  r = await call("/archive?view=cal&m=2026-11&contest=" + encodeURIComponent("电子设计竞赛"));
+  const nextMonthLink = (r.text.match(/href="([^"]*m=2026-12[^"]*)"/) || [])[1] || "";
+  check("翻月保留赛事筛选", nextMonthLink.includes("contest=") && nextMonthLink.includes("view=cal"),
+    nextMonthLink);
+
   r = await call("/archive?contest=" + encodeURIComponent("<script>alert(1)</script>"));
   check("筛选参数被转义", !r.text.includes("<script>alert(1)</script>"));
 

@@ -92,6 +92,7 @@
 - **双重确认订阅**：首次登录后再点一封确认邮件才进入名单，随后发欢迎邮件并记录同意时间。
 - **频率与暂停**：控制台可选即时 / 日报 / 周报，或暂停到指定日期；暂停期间的通知随恢复后的摘要补上。
 - **归档 · RSS**：`/archive`、`/feed.xml` 无需注册即可查看通知；日历改为**个人订阅制**，只对本人签发。
+- **归档日历视图**：月历格子直接标出「节点名 + 来源」，右上角数字是当天节点数；点格子跳到当天日程（锚点高亮），节点标题链回原文；月份可用「上月 / 下月 / 本月」或折叠的 12 个月网格快速切换，翻月保留当前筛选。
 - **退订挽留与统计**：退订页收集原因并提供「改成周报」；`/api/stats` 输出统计。
 - **失败可见**：发信失败不写已读状态、下轮重试；Actions 失败告警 + 成功心跳；Resend webhook 验签后自动清理退信 / 投诉地址。
 - **AI 推送分析**：用 OpenAI 兼容接口（默认 DeepSeek）做分类、一句话摘要、紧急度判断与**公告正文里的真实事件日期抽取**；提示词独立存放在 `prompts/`，结果按内容指纹缓存。
@@ -455,7 +456,16 @@ yds-notifier/
 │   ├── src/env.ts                # 配置派生：域名 / 多来源白名单
 │   ├── src/security.ts           # 签名 / CSRF / CSP / 校验
 │   ├── src/auth.ts · rate.ts · mailer.ts
-│   ├── src/ui/                   # 界面层：styles / scripts / layout / pages
+│   ├── src/feed/                 # 通知数据契约（types.ts）+ 赛程展开（schedule.ts）
+│   ├── src/ui/
+│   │   ├── archive/              # 归档页：结构与样式分离
+│   │   │   ├── page.ts           # 筛选 → 统计 → 视图 → 外壳
+│   │   │   ├── list.ts           # 通知卡片列表
+│   │   │   ├── calendar.ts       # 日历视图（来源 / 锚点定位 / 月份快切）
+│   │   │   ├── common.ts         # URL 改写 / chip / 开关 / 日期工具
+│   │   │   ├── layout.ts         # <html> 外壳 + CSP nonce
+│   │   │   └── styles.css        # 全部样式（构建时以文本模块内联）
+│   │   └── styles.ts · scripts.ts · layout.ts · pages.ts   # 订阅端页面
 │   ├── src/handlers/             # login / dashboard / unsubscribe / api / feed / webhook
 │   ├── scripts/sync-config.mjs   # .env → wrangler.toml（自定义域名 + KV id）
 │   ├── wrangler.toml             # main = dist/index.js，AUTO-CONFIG 区块

@@ -1,5 +1,10 @@
 /**
- * 通知归档 / RSS / 日历订阅，以及供 Python 端写入通知元数据的接口。
+ * 通知写入 / RSS / 个人日历接口。
+ *
+ * 归档页本身已迁到 `ui/archive/`（结构与样式分离），这里只负责：
+ *   1. `POST /api/notices`  接收 Python 端同步的数据（白名单清洗）
+ *   2. `GET  /feed.xml`     RSS
+ *   3. `GET  /calendar.ics` 个人日历（签名校验 + 偏好过滤）
  *
  * KV: feed:notices -> JSON 字符串（FeedPayload）。写入时按白名单清洗，
  * 读取侧再清洗一次，避免 KV 被直接写入时把脏数据带进对外页面。
@@ -7,80 +12,23 @@
 
 import { getUser, type Prefs } from '../auth';
 import { getConfig, type Env } from '../env';
+import { scheduleEntries } from '../feed/schedule';
+import {
+  AI_CATEGORIES,
+  AUDIENCE_LABELS,
+  AUDIENCES,
+  EVENT_KINDS,
+  STAGES,
+  URGENCIES,
+  type AiEvent,
+  type Attachment,
+  type ContestSchedule,
+  type FeedPayload,
+  type Notice,
+} from '../feed/types';
 import { esc, safeEqual, securityHeaders, signEmailToken, verifyEmailToken } from '../security';
-import { archivePage } from '../ui/archive';
+import { renderArchive, renderArchiveError } from '../ui/archive';
 import { jsonResp, page } from '../ui/layout';
-
-interface Attachment {
-  name: string;
-  url: string;
-}
-
-/** AI 抽出的真实事件日（已由 Python 端确定性归一化成 YYYY-MM-DD）。 */
-interface AiEvent {
-  date: string;
-  evidence: string;
-  label: string;
-  kind: string;
-  location: string;
-  confidence: number;
-}
-
-interface Notice {
-  uid: string;
-  title: string;
-  url: string;
-  date: string;
-  category: string;
-  source: string;
-  summary: string;
-  deadline: string;
-  attachments?: Attachment[];
-  changeKind?: 'new' | 'changed';
-  contest?: string;
-  stage?: string;
-  audiences?: string[];
-  action?: string;
-  aiCategory?: string;
-  aiSummary?: string;
-  aiUrgency?: string;
-  aiReason?: string;
-  aiEvents?: AiEvent[];
-  aiConfidence?: number;
-  aiVersion?: string;
-}
-
-/** 官方赛程表中的一项赛事（Python 端解析，日期均为 YYYY-MM-DD）。 */
-interface ContestSchedule {
-  contest: string;
-  signupStart: string;
-  signupEnd: string;
-  submitStart: string;
-  submitEnd: string;
-  finalStart: string;
-  finalEnd: string;
-  sourceUrl: string;
-}
-
-const URGENCIES = ['critical', 'high', 'normal', 'low'];
-const AI_CATEGORIES = ['报名参赛', '评审与名单', '决赛与收官', '赛事动态', '其他通知'];
-const EVENT_KINDS = ['deadline', 'event', 'notice', 'other'];
-const STAGES = ['报名', '资格审查', '缴费', '提交作品', '评审', '决赛', '公示', '获奖', '报销', '承办', '动态', '其他'];
-const AUDIENCES = ['student', 'advisor', 'admin', 'organizer'];
-const AUDIENCE_LABELS: Record<string, string> = {
-  student: '参赛学生',
-  advisor: '指导教师',
-  admin: '培养单位',
-  organizer: '分赛区 / 承办方',
-};
-
-interface FeedPayload {
-  site?: string;
-  baseUrl?: string;
-  generatedAt?: string;
-  notices?: unknown; // 运行期再校验是否为数组
-  schedule?: unknown;
-}
 
 /* ---------------------------- 通用清洗 ---------------------------- */
 
@@ -359,310 +307,22 @@ export async function handleNoticesPost(req: Request, env: Env): Promise<Respons
 
 /* ---------------------------- 2. 归档页 ---------------------------- */
 
-/** 归档页卡片：日期 / 阶段 / 来源 / 赛事 → 标题 → 摘要 → 日程 → 要做什么 → 面向。 */
-function archiveCard(n: Notice): string {
-  const href = safeUrl(n.url);
-  const title = esc(n.title);
-  const link = href
-    ? `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer">${title}</a>`
-    : title;
-
-  const meta: string[] = [`<span>${esc(n.date)}</span>`];
-  if (n.stage && n.stage !== '其他') meta.push(`<span class="stg">${esc(n.stage)}</span>`);
-  if (n.source) meta.push(`<span>${esc(n.source)}</span>`);
-  if (n.contest) meta.push(`<span class="ctg">${esc(n.contest)}</span>`);
-
-  const summary = n.aiSummary || n.summary
-    ? `<div class="ns">${esc(n.aiSummary || n.summary)}</div>`
-    : '';
-
-  const evs = n.aiEvents || [];
-  const eventHtml = evs.length
-    ? `<div class="er">${evs
-        .map((e) => {
-          const label = e.label || (e.kind === 'deadline' ? '截止' : '日程');
-          const cls = e.kind === 'deadline' ? 'dt dl' : 'dt';
-          const where = e.location ? `（${esc(e.location)}）` : '';
-          return `<div class="ei"><span class="lb">${esc(label)}：</span><span class="${cls}">${esc(e.date)}${where}</span></div>`;
-        })
-        .join('')}</div>`
-    : n.deadline
-      ? `<div class="er"><div class="ei"><span class="lb">截止 / 日程：</span><span class="dt dl">${esc(n.deadline)}</span></div></div>`
-      : '';
-
-  const action = n.action
-    ? `<div class="ar"><span class="lb">要做什么：</span>${esc(n.action)}</div>`
-    : '';
-
-  const auds = n.audiences || [];
-  const audience = auds.length
-    ? `<div class="arow"><span class="arlb">面向：</span>${auds
-        .map((a) => `<span class="at">${esc(AUDIENCE_LABELS[a] || a)}</span>`)
-        .join('')}</div>`
-    : '';
-
-  const badges: string[] = [];
-  if (n.changeKind === 'changed') badges.push('<span class="badge upd">更新</span>');
-  if (n.aiUrgency === 'critical') badges.push('<span class="badge crit">重要</span>');
-  const badgeHtml = badges.length ? `<div class="badges">${badges.join('')}</div>` : '';
-
-  return `<div class="nc">
-  <div class="mr">${meta.join('')}</div>
-  <div class="nt">${link}</div>
-  ${summary}
-  ${eventHtml}
-  ${action}
-  ${audience}
-  ${badgeHtml}
-</div>`;
-}
-
-/** 在保留其它筛选条件的前提下改一个参数（空值表示去掉该条件）。 */
-function archiveHref(url: URL, patch: Record<string, string>): string {
-  const p = new URLSearchParams(url.searchParams.toString());
-  for (const [k, v] of Object.entries(patch)) {
-    if (!v) p.delete(k);
-    else p.set(k, v);
-  }
-  const qs = p.toString();
-  return qs ? `/archive?${qs}` : '/archive';
-}
-
-function chip(label: string, href: string, active: boolean): string {
-  return `<a class="fb${active ? ' act' : ''}" href="${esc(href)}">${esc(label)}</a>`;
-}
-
-function toggle(label: string, href: string, on: boolean): string {
-  return `<a class="tw" href="${esc(href)}"><span>${label}</span><span class="tb${on ? ' on' : ''}"></span></a>`;
-}
-
-interface CalEvent {
-  date: string;
-  label: string;
-  deadline: boolean;
-  title: string;
-  url: string;
-}
-
-/** 把通知里的事件与官方赛程摊平成日历事件。 */
-function calendarEvents(notices: Notice[], schedule: ContestSchedule[]): CalEvent[] {
-  const out: CalEvent[] = [];
-  for (const n of notices) {
-    const events = (n.aiEvents || []).length
-      ? n.aiEvents!.map((e) => ({
-          date: e.date,
-          label: e.label || (e.kind === 'deadline' ? '截止' : '日程'),
-          deadline: e.kind === 'deadline',
-        }))
-      : n.deadline || n.date
-        ? [{ date: n.deadline || n.date, label: '截止 / 日程', deadline: Boolean(n.deadline) }]
-        : [];
-    for (const e of events) {
-      if (!validDate(e.date)) continue;
-      out.push({ date: e.date, label: e.label, deadline: e.deadline, title: n.title, url: safeUrl(n.url) });
-    }
-  }
-  for (const s of schedule) {
-    for (const item of scheduleEntries(s)) {
-      if (!validDate(item.date)) continue;
-      out.push({
-        date: item.date,
-        label: `${s.contest} · ${item.label}`,
-        deadline: item.deadline,
-        title: `${s.contest} ${item.label}`,
-        url: safeUrl(s.sourceUrl),
-      });
-    }
-  }
-  return out;
-}
-
-function renderCalendar(events: CalEvent[], month: string, url: URL): string {
-  const now = new Date();
-  const m = /^(\d{4})-(\d{2})$/.exec(month);
-  const year = m ? Number(m[1]) : now.getUTCFullYear();
-  const mon = m ? Math.min(12, Math.max(1, Number(m[2]))) : now.getUTCMonth() + 1;
-  const first = new Date(Date.UTC(year, mon - 1, 1));
-  const startPad = first.getUTCDay();
-  const days = new Date(Date.UTC(year, mon, 0)).getUTCDate();
-
-  const byDay = new Map<string, CalEvent[]>();
-  for (const e of events) {
-    if (!e.date.startsWith(`${year}-${String(mon).padStart(2, '0')}`)) continue;
-    const arr = byDay.get(e.date) || [];
-    arr.push(e);
-    byDay.set(e.date, arr);
-  }
-
-  const cells: string[] = ['<div class="cdh">日</div>', '<div class="cdh">一</div>', '<div class="cdh">二</div>',
-    '<div class="cdh">三</div>', '<div class="cdh">四</div>', '<div class="cdh">五</div>', '<div class="cdh">六</div>'];
-  for (let i = 0; i < startPad; i++) cells.push('<div class="cd om"></div>');
-  for (let d = 1; d <= days; d++) {
-    const key = `${year}-${String(mon).padStart(2, '0')}-${String(d).padStart(2, '0')}`;
-    const list = byDay.get(key) || [];
-    const dots = list
-      .slice(0, 4)
-      .map((e) => `<span class="ed ${e.deadline ? 'dl' : 'ev'}"></span>`)
-      .join('');
-    cells.push(`<div class="cd${list.length ? ' he' : ''}"><div class="dn">${d}</div>${dots}</div>`);
-  }
-  while (cells.length % 7 !== 0) cells.push('<div class="cd om"></div>');
-
-  const prev = mon === 1 ? `${year - 1}-12` : `${year}-${String(mon - 1).padStart(2, '0')}`;
-  const next = mon === 12 ? `${year + 1}-01` : `${year}-${String(mon + 1).padStart(2, '0')}`;
-
-  const monthEvents = events
-    .filter((e) => e.date.startsWith(`${year}-${String(mon).padStart(2, '0')}`))
-    .sort((a, b) => a.date.localeCompare(b.date));
-  const listHtml = monthEvents.length
-    ? monthEvents
-        .slice(0, 60)
-        .map((e) => {
-          const t = e.url
-            ? `<a href="${esc(e.url)}" target="_blank" rel="noopener noreferrer">${esc(e.title)}</a>`
-            : esc(e.title);
-          return `<div class="cei"><span class="edate">${esc(e.date)}</span> · ${esc(e.label)} · ${t}</div>`;
-        })
-        .join('')
-    : '<p class="calem">这个月没有日程节点，看看别的月份吧。</p>';
-
-  return `<div class="calv">
-  <div class="calh"><h3>${year} 年 ${mon} 月</h3>
-    <div class="caln">
-      <a href="${esc(archiveHref(url, { view: 'cal', m: prev }))}">上月</a>
-      <a href="${esc(archiveHref(url, { view: 'cal', m: next }))}">下月</a>
-    </div>
-  </div>
-  <div class="cg">${cells.join('')}</div>
-  <div class="cleg">
-    <span><span class="d dl"></span> 截止日期</span>
-    <span><span class="d ev"></span> 赛事活动</span>
-  </div>
-  <div class="calev">
-    <h4>本月日程（${monthEvents.length}）</h4>
-    ${listHtml}
-  </div>
-</div>`;
-}
-
+/**
+ * 归档页：只负责取数并把数据交给 `ui/archive`。
+ * 筛选、卡片、日历与样式都在 UI 层，改版式不需要动这里。
+ */
 export async function handleArchive(req: Request, env: Env): Promise<Response> {
   const url = new URL(req.url);
   try {
     const feed = await loadFeed(env);
-    const all = sorted(feed.notices);
-    const contest = (url.searchParams.get('contest') || '').trim();
-    const category = (url.searchParams.get('category') || '').trim();
-    const audience = (url.searchParams.get('audience') || '').trim();
-    const onlyImportant = url.searchParams.get('important') === '1';
-    const view = url.searchParams.get('view') === 'cal' ? 'cal' : 'list';
-
-    const filtered = all.filter((n) => {
-      if (contest && n.contest !== contest) return false;
-      if (category && n.category !== category) return false;
-      if (audience && !(n.audiences || []).includes(audience)) return false;
-      if (onlyImportant && n.aiUrgency !== 'critical' && n.aiUrgency !== 'high') return false;
-      return true;
+    return renderArchive({
+      notices: feed.notices,
+      schedule: feed.schedule,
+      generatedAt: feed.generatedAt,
+      url,
     });
-
-    const contests = [...new Set(all.map((n) => n.contest).filter((c): c is string => Boolean(c)))];
-    const categories = [...new Set(all.map((n) => n.category).filter((c): c is string => Boolean(c)))];
-    const hasFilter = Boolean(contest || category || audience || onlyImportant);
-
-    const generated = feed.generatedAt ? new Date(feed.generatedAt) : new Date();
-    const stamp = Number.isNaN(generated.getTime())
-      ? ''
-      : `${generated.toISOString().slice(0, 10)} ${generated.toISOString().slice(11, 16)}`;
-
-    const stats = `共 <strong>${all.length}</strong> 条通知 · <strong>${contests.length}</strong> 项赛事`
-      + (hasFilter ? ` · 筛选出 <strong>${filtered.length}</strong> 条` : '')
-      + (stamp ? ` · 最近更新 <strong>${stamp}</strong>` : '');
-
-    const contestChips = [
-      chip('全部赛事', archiveHref(url, { contest: '' }), !contest),
-      ...contests.map((c) => chip(c, archiveHref(url, { contest: c }), c === contest)),
-    ].join('');
-
-    const catChips = [
-      chip('全部分类', archiveHref(url, { category: '' }), !category),
-      ...categories.map((c) => chip(c, archiveHref(url, { category: c }), c === category)),
-    ].join('');
-
-    const toggles = [
-      toggle('只看重要', archiveHref(url, { important: onlyImportant ? '' : '1' }), onlyImportant),
-      toggle('参赛者视角', archiveHref(url, { audience: audience === 'student' ? '' : 'student' }),
-        audience === 'student'),
-    ].join('');
-
-    const tabs = `<div class="vtabs">
-      <a class="vt${view === 'list' ? ' act' : ''}" href="${esc(archiveHref(url, { view: '' }))}">通知列表</a>
-      <a class="vt${view === 'cal' ? ' act' : ''}" href="${esc(archiveHref(url, { view: 'cal' }))}">日历视图</a>
-    </div>`;
-
-    const bodyList = filtered.length
-      ? `<div class="nl">${filtered.map(archiveCard).join('')}</div>`
-      : `<div class="empty">${
-          hasFilter ? '没有符合筛选条件的通知。' : '暂时还没有收录通知，过段时间再来看看吧。'
-        }</div>`;
-
-    const main = view === 'cal'
-      ? renderCalendar(calendarEvents(filtered, feed.schedule), url.searchParams.get('m') || '', url)
-      : bodyList;
-
-    const pageBody = `<div class="container">
-  <header class="header">
-    <div class="dot"></div>
-    <h1>研电赛<span class="hl">通知</span></h1>
-    <p class="sub">中国研究生创新实践系列大赛 · 官方通知一站式速览</p>
-    <div class="nav">
-      <a href="/">控制台 / 个人日历</a><a href="/feed.xml">RSS 订阅</a>${
-        hasFilter ? '<a href="/archive">清除筛选</a>' : ''
-      }
-    </div>
-  </header>
-
-  <div class="stats">${stats}</div>
-
-  ${tabs}
-
-  <div class="fsec">
-    <div class="fl">赛事筛选</div>
-    <div class="cscr"><div class="fr">${contestChips}</div></div>
-    <div class="fl fgap">通知分类</div>
-    <div class="fr">${catChips}</div>
-    <div class="fr fgap">${toggles}</div>
-  </div>
-
-  ${main}
-
-  <div class="ebar">
-    <a class="ebtn" href="/">个人日历（登录后复制）</a>
-    <a class="ebtn" href="/feed.xml">订阅 RSS</a>
-    <a class="ebtn" href="/archive">刷新列表</a>
-  </div>
-
-  <div class="srcbar">
-    <div>数据来自 <a href="https://cpipc.acge.org.cn" target="_blank" rel="noopener noreferrer">研创网</a>
-      <span class="sep">·</span>
-      <a href="https://www.cie.org.cn" target="_blank" rel="noopener noreferrer">中国电子学会</a>
-      <span class="sep">·</span> 共 ${all.length} 条，覆盖 ${contests.length} 项主题赛事
-    </div>
-    <div>日历按订阅者角色与关注赛事单独签发，未登录不提供公共日历。</div>
-  </div>
-
-  <footer class="footer">
-    数据来自研创网与中国电子学会官网，请以官方原文为准
-  </footer>
-</div>`;
-
-    return archivePage({ title: '通知归档 · 研电赛', body: pageBody });
   } catch {
-    return archivePage(
-      {
-        title: '通知归档 · 研电赛',
-        body: '<div class="container"><div class="empty">归档暂时无法加载，请稍后再试。</div></div>',
-      },
-      500,
-    );
+    return renderArchiveError();
   }
 }
 
@@ -711,6 +371,7 @@ function applyPrefs<T extends { contest?: string; audiences?: string[] }>(
     return true;
   });
 }
+
 
 /** 控制台展示的个人日历地址（签名绑定邮箱，只读）。 */
 export async function personalCalendarUrl(env: Env, email: string): Promise<string> {
@@ -820,17 +481,6 @@ function pushAlarm(lines: string[], days: number, desc: string): void {
   lines.push('ACTION:DISPLAY');
   lines.push(`DESCRIPTION:${icalEsc(desc)}`);
   lines.push('END:VALARM');
-}
-
-/** 赛程字段 → 日历标签；deadline 类型才加提醒。 */
-function scheduleEntries(s: ContestSchedule): Array<{ date: string; label: string; deadline: boolean }> {
-  return [
-    { date: s.signupStart, label: '报名开始', deadline: false },
-    { date: s.signupEnd, label: '报名截止', deadline: true },
-    { date: s.submitEnd, label: '提交作品截止', deadline: true },
-    { date: s.finalStart, label: '决赛开始', deadline: false },
-    { date: s.finalEnd, label: '决赛结束', deadline: false },
-  ];
 }
 
 /** 按 URL 查询参数过滤：?contest=赛事名&audience=角色（日历接口用）。 */
