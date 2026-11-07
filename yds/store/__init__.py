@@ -1,7 +1,7 @@
 """状态存储层：把"两次运行之间怎么传状态"与业务代码解耦。
 
-当前实现：`r2`（Cloudflare R2 / S3 兼容）。未配置时 `build_store()` 返回 None，
-整条链路退回本地 JSON 文件 + git 回写，行为与改造前完全一致。
+当前实现：`r2`（Cloudflare R2 / S3 兼容）。未配置凭证时 `build_store()` 返回 None，
+整条链路退回本地 JSON 文件 + git 回写。
 
 用法（main.py）：
 

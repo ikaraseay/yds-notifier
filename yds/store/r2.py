@@ -31,7 +31,7 @@ STATE_FILES = (
     "pending.json",
     "schedule.json",
     "reminders.json",
-    "zones.json",
+    "zones.json",  # 赛事状态 AI 判定缓存（v2），每个正常运行的轮次都会读写，勿删
 )
 
 _GZIP_MAGIC = b"\x1f\x8b"

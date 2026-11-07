@@ -176,7 +176,7 @@ class Settings:
             unsub_url=_s("UNSUB_URL") or (f"{base}/unsubscribe" if base else ""),
             subscribe_api_url=_s("SUBSCRIBE_API_URL") or (f"{internal}/api/list" if internal else ""),
             notices_api_url=_s("NOTICES_API_URL") or (f"{internal}/api/notices" if internal else ""),
-            publish_notices=_s("PUBLISH_NOTICES", "true").lower() not in ("0", "false", "no"),
+            publish_notices=_b("PUBLISH_NOTICES", True),
             unsub_secret=_s("UNSUB_SECRET"),
             unsub_ttl_days=max(1, _i("UNSUB_TTL_DAYS", 180)),
             subscribe_api_token=_s("SUBSCRIBE_API_TOKEN"),

@@ -31,6 +31,9 @@ log = logging.getLogger("yds")
 class DispatchResult:
     sent: int = 0
     failed: List[str] = field(default_factory=list)
+    # 只有「即时通知投递失败」才阻止 mark(fresh)；紧急快报、日程提醒各有
+    # 独立去重机制，失败不该让已成功送达的即时通知下一轮整批重发。
+    instant_failed: List[str] = field(default_factory=list)
     digest_sent: Dict[str, int] = field(default_factory=dict)
     digest_failed: int = 0
     pool_changed: bool = False
@@ -109,6 +112,16 @@ def _is_urgent(n: Notice) -> bool:
     return days is not None and days <= 7
 
 
+def in_digest_window(now: datetime, digest_hour: int = 10) -> bool:
+    """日报 / 周报只认「上午那一轮」，并给 GitHub 定时任务留 8 小时延迟余量。
+
+    抓取每天两轮（10:00 / 20:00 北京时间），只有上午那轮发摘要：早上被延迟
+    到下午仍算窗口，晚上那轮（20:00）不在区间内。发完会清空摘要池，
+    窗口内多跑一次也不会重复发。
+    """
+    return digest_hour <= now.hour < digest_hour + 8
+
+
 def dispatch(
     *,
     sender: BaseSender,
@@ -127,7 +140,7 @@ def dispatch(
 
     prefix = cfg.get("subject_prefix", "【研电赛】")
     max_notify = max(1, int(cfg.get("max_notify", 25)))
-    digest_hour = int(cfg.get("digest_hour", 8))
+    digest_hour = int(cfg.get("digest_hour", 10))
     repo_url = settings.repo_url
     fresh = sort_notices(notices)
 
@@ -174,6 +187,7 @@ def dispatch(
             except Exception as exc:  # noqa: BLE001 - 单个收件人失败不阻断其他人
                 log.error("发送给 %s 失败：%s", rcpt.email, exc)
                 result.failed.append(rcpt.email)
+                result.instant_failed.append(rcpt.email)
 
     # 3b) 紧急快报：给原本要等摘要的用户也立刻送一份（不绕过暂停）
     if urgent:
@@ -215,10 +229,11 @@ def dispatch(
                     if rcpt.email not in result.failed:
                         result.failed.append(rcpt.email)
 
-    # 4) 摘要窗口：digest_hour 这一小时内都算（GitHub 定时任务可能晚到几十分钟）；
-    #    发完会清空摘要池，所以同一小时多跑一次也不会重复发。周报只在周一。
+    # 4) 摘要窗口：只有上午那轮（digest_hour 起 8 小时内）发摘要。
+    #    GitHub 定时任务晚到是常态，窗口太窄会让日报 / 周报整天不发；
+    #    发完会清空摘要池，手动重复触发也不会重发。周报只在周一。
     now = datetime.now()
-    in_window = now.hour == digest_hour
+    in_window = in_digest_window(now, digest_hour)
     due = {"daily": in_window, "weekly": in_window and now.weekday() == 0}
 
     for key, users in digest_users.items():

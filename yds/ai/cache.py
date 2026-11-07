@@ -90,7 +90,7 @@ class AiCache:
             rec = {}
             self.items[uid] = rec
         elif rec.get("body") == trimmed:
-            return  # 内容没变不标脏，避免每 10 分钟产生一次无意义的 git 提交
+            return  # 内容没变不标脏，避免每轮产生一次无意义的状态写回
         rec["body"] = trimmed
         rec.setdefault("at", datetime.now(timezone.utc).isoformat(timespec="seconds"))
         self.changed = True

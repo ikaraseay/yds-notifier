@@ -5,6 +5,8 @@
  * 站点是单 Worker 部署，多个资源就多一处会漂移的事实源。
  */
 
+import { cacheControl } from "./security";
+
 /** 项目仓库：页脚「项目地址」与「错误报告」都指向这里 */
 export const PROJECT_URL = "https://github.com/ikaraseay/yds-notifier";
 export const ISSUES_URL = `${PROJECT_URL}/issues/new`;
@@ -34,7 +36,7 @@ export function unofficialSenderName(name: string): string {
 
 const TEXT_HEADERS = {
   "Content-Type": "text/plain;charset=utf-8",
-  "Cache-Control": "public, max-age=3600",
+  "Cache-Control": cacheControl(3600),
   "X-Content-Type-Options": "nosniff",
 } as const;
 
@@ -88,7 +90,7 @@ export function llmsResponse(baseUrl: string): Response {
 
 ## 使用约定
 - 抓取规则见 [robots.txt](${base}/robots.txt)。
-- 通知每小时同步一次，可能有延迟；每条都附原文链接，**以原文为准**。
+- 通知每天同步两次（北京时间 10:00 与 20:00），可能有延迟；每条都附原文链接，**以原文为准**。
 - \`/dashboard\`、\`/unsubscribe\`、\`/calendar.ics\` 等路径需要登录或邮箱签名，不对爬虫开放，
   也不提供任何绕过方式。
 - 本站不是竞赛官方渠道，报名、截止时间等关键信息请以组委会公告为准。

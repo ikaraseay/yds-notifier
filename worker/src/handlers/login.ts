@@ -40,13 +40,13 @@ async function confirmSubscription(env: Env, email: string, user: User): Promise
     status: "confirmed",
     confirmedAt: existed?.confirmedAt || now,
     prefs: user.prefs,
-    source: "double-opt-in",
+    source: "magic-link",
   });
   await putUser(env.SUBS, {
     ...user,
     status: "confirmed",
     confirmedAt: user.confirmedAt || now,
-    consentSource: user.consentSource || "confirm-email",
+    consentSource: user.consentSource || "login-link",
   });
   if (!already) await env.SUBS.put("meta:count", String((await getCount(env)) + 1));
 
@@ -118,6 +118,11 @@ async function sendConfirmMail(env: Env, email: string): Promise<boolean> {
 /** POST /api/login —— 提交邮箱 → 发一次性登录链接 */
 export async function handleLogin(req: Request, env: Env): Promise<Response> {
   const cfg = getConfig(env);
+  // 发信是状态变更，浏览器跨站请求一律拒绝；非浏览器客户端没有 Origin /
+  // Sec-Fetch-Site，由 SameSite=Lax Cookie 兜底。
+  if (!assertSameOrigin(req, cfg.allowedOrigins)) {
+    return jsonResp({ ok: false, message: "请求来源不合法" }, 403);
+  }
   const ip = req.headers.get("CF-Connecting-IP") || "unknown";
   const body = (await req.json().catch(() => ({}))) as { email?: string };
   const { ok, email, reason } = normalizeEmail(body.email || "");

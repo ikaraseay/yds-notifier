@@ -1266,5 +1266,30 @@ const check = (name, cond, extra = "") => {
   check("发件人带 [非官方]", String(tagged.from).includes("[非官方]"), tagged.from);
   check("正文页脚标注非官方", String(tagged.html).includes("非官方项目"));
 
+  // 归档是公开内容：robots.txt / llms.txt 放行，HTML 自身也应允许索引
+  r = await call("/archive");
+  check("归档页允许索引", r.text.includes('name="robots" content="index,follow"'), r.text.slice(0, 160));
+  for (const p of ["/feed.xml", "/robots.txt", "/llms.txt", "/favicon.svg"]) {
+    const h = (await call(p)).headers.get("cache-control") || "";
+    check(`${p} 声明 no-transform`, h.includes("no-transform"), h);
+  }
+
+  // 登录链接即确认链接：存进 KV 的同意证据要写明真实来源
+  const consentMail = "consent-source@qq.com";
+  await post("/api/login", { email: consentMail });
+  await call(magicPathOf(consentMail));
+  const cSub = JSON.parse(await env.SUBS.get("sub:" + consentMail));
+  const cUser = JSON.parse(await env.SUBS.get("user:" + consentMail));
+  check("名单同意来源记为登录链接", cSub.source === "magic-link", cSub.source);
+  check("用户同意来源记为登录链接", cUser.consentSource === "login-link", cUser.consentSource);
+
+  // /api/login 会触发发信，属于状态变更，跨站 Origin 必须被拒
+  const csrf = await call("/api/login", {
+    method: "POST",
+    body: JSON.stringify({ email: "csrf-guard@qq.com" }),
+    headers: { Origin: "https://evil.example" },
+  }, "8.8.8.8");
+  check("跨站提交登录被拒", csrf.status === 403, csrf.status);
+
   console.log(`\n结果：${pass} 项通过${process.exitCode ? "，存在失败" : "，全部通过"}`);
 })();

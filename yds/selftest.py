@@ -196,6 +196,29 @@ def main() -> int:
         broken = State(path)
         check("损坏文件 fail-closed 不重建基线", broken.corrupt and not broken.is_first_run)
 
+    # 详情抽检按「上次复核时间」轮转：避免每天重复抽同一批最近通知
+    from .main import pick_detail_checks
+    with tempfile.TemporaryDirectory() as tmp:
+        st3 = State(str(Path(tmp) / "seen.json"))
+        today = date(2026, 11, 7)
+        pool = []
+        for i in range(5):
+            it = _notice(f"抽检候选 {i}", uid=f"ck{i}", published=today - timedelta(days=i))
+            st3.mark([it])
+            pool.append(it)
+        check("抽检优先未复核的最近条目", pick_detail_checks(pool, st3, 2, today) == ["ck0", "ck1"])
+        st3.record_detail_baseline([pool[0], pool[1]], today.isoformat())
+        check("按条记录复核日期", st3.detail_checked_at("ck0") == today.isoformat())
+        check("已复核条目排到队尾",
+              pick_detail_checks(pool, st3, 2, today) == ["ck2", "ck3"],
+              str(pick_detail_checks(pool, st3, 2, today)))
+        check("从未复核的条目优先于复核过的",
+              pick_detail_checks(pool, st3, 5, today)[:3] == ["ck2", "ck3", "ck4"])
+        old_doc = _notice("两个月前的旧文", uid="ckold", published=today - timedelta(days=60))
+        st3.mark([old_doc])
+        check("超 30 天的旧文不进抽检",
+              "ckold" not in pick_detail_checks(pool + [old_doc], st3, 10, today))
+
     print("\n[6] 频率与暂停分流")
     check("即时用户不进摘要池", Recipient(email="a@qq.com").digest_key == "")
     check("日报用户进 daily 池", Recipient(email="b@qq.com", frequency="daily").digest_key == "daily")
@@ -203,6 +226,15 @@ def main() -> int:
     paused = Recipient(email="d@qq.com", paused_until="2099-01-01")
     check("暂停中判定为真", paused.is_paused(date(2026, 11, 5)))
     check("暂停用户进 daily 池补发", paused.digest_key == "daily")
+    # 每天两轮（10:00 / 20:00）：只有上午那轮发摘要，晚上那轮不发
+    from datetime import datetime as _dt
+    from .dispatch import in_digest_window
+    check("10:00 在摘要窗口", in_digest_window(_dt(2026, 11, 7, 10, 0), 10))
+    check("上午轮延迟到 17:30 仍在窗口", in_digest_window(_dt(2026, 11, 7, 17, 30), 10))
+    check("延迟到 18:00 超出窗口", not in_digest_window(_dt(2026, 11, 7, 18, 0), 10))
+    check("09:59 不在窗口", not in_digest_window(_dt(2026, 11, 7, 9, 59), 10))
+    check("20:00 那轮不发第二次摘要", not in_digest_window(_dt(2026, 11, 7, 20, 0), 10))
+    check("默认窗口按 10 点算", in_digest_window(_dt(2026, 11, 7, 10, 0)))
 
     print("\n[7] 归档 / RSS / 日历载荷")
     d = _notice("报名截止 2026年11月25日的通知")
@@ -246,8 +278,18 @@ def main() -> int:
     card_only = build_html([shared], audiences=["student"])
     check("卡片「面向」只列勾选角色", "面向：参赛学生" in card_only and "指导教师" not in card_only)
     both = _notice("报名与审核都相关的通知", uid="p3", audiences=["student", "admin"])
-    dedup = build_html([both], audiences=["student", "admin"])
-    check("同一通知只归到首个角色", dedup.count(both.title) == 2, str(dedup.count(both.title)))
+    overlap = build_html([both], audiences=["student", "admin"])
+    head = overlap.split("按赛事汇总")[0]
+    check("同一通知在适用的多个角色下都出现", head.count(both.title) == 2,
+          str(head.count(both.title)))
+    check("两个角色标题都在", "参赛学生" in head and "培养单位" in head)
+    # 回归守卫：勾选全部视角时不能再折叠成只剩「参赛学生」
+    org = _notice("承办方赛区安排", uid="p5", audiences=["organizer"])
+    all_roles = build_html([both, org, shared], audiences=list(AUDIENCES))
+    all_head = all_roles.split("按赛事汇总")[0]
+    check("勾选全角色时四个视角都在", all(
+        name in all_head for name in ("参赛学生", "指导教师", "培养单位", "分赛区")
+    ), all_head[:120])
 
     print("\n[9c] 已结束的通知不再写进邮件")
     old = _notice("数学建模赛题下载提醒", uid="e1", audiences=["student"])
@@ -324,6 +366,221 @@ def main() -> int:
     check("off 下不校验", fetch_mod.robots_allows("https://blocked.test/a"))
     check("汇总行列出主机与次数", "blocked.test" in fetch_mod.robots_summary())
     fetch_mod.set_respect_robots("enforce")
+
+    print("\n[9f] 赛事状态 AI 判定与低频扫描")
+    from .contests import (
+        collect_evidence, classify, load_state, plan, save_state,
+    )
+
+    class FakeAI:
+        def __init__(self, payload): self.payload = payload
+        def complete(self, system, user): return json.dumps(self.payload, ensure_ascii=False)
+
+    aiconf = AiConfig(enabled=True, api_key="x", base_url="http://x", model="m",
+                      thinking=False, temperature=0, max_tokens=200, timeout=1,
+                      batch_size=10, max_body_chars=200, prompt_version="")
+    with tempfile.TemporaryDirectory() as tmp:
+        names = ["已结束赛事", "进行中赛事"]
+        Path(tmp, "schedule.json").write_text(json.dumps({"contests": [
+            {"contest": "已结束赛事", "finalEnd": "2026-09-01"},
+            {"contest": "进行中赛事", "finalEnd": "2026-12-20"},
+        ]}, ensure_ascii=False), encoding="utf-8")
+        Path(tmp, "ai.json").write_text(json.dumps({"items": {
+            "u1": {"analysis": {"contest": "已结束赛事", "stage": "公示",
+                                 "events": [{"date": "2026-09-01", "label": "决赛"}]}},
+            "u2": {"analysis": {"contest": "进行中赛事", "stage": "决赛",
+                                 "events": [{"date": "2026-12-20", "label": "决赛"}]}},
+        }}, ensure_ascii=False), encoding="utf-8")
+        Path(tmp, "seen.json").write_text(json.dumps({"seen": {
+            "u1": {"title": "获奖名单公布", "date": "2026-09-02"},
+            "u2": {"title": "决赛通知", "date": "2026-11-01"},
+        }}, ensure_ascii=False), encoding="utf-8")
+        today = date(2026, 11, 7)
+        evidence = collect_evidence(tmp, names, today)
+        check("证据算出未来节点数", [e["futureNodes"] for e in evidence] == [0, 1],
+              str([e["futureNodes"] for e in evidence]))
+        ai_out = {"contests": [
+            {"name": "已结束赛事", "ended": True, "reason": "决赛已过"},
+            {"name": "进行中赛事", "ended": True, "reason": "模型误判"},
+            {"name": "不存在的赛事", "ended": True, "reason": "应被丢弃"},
+        ]}
+        verdicts = classify(evidence, today, aiconf, client=FakeAI(ai_out))
+        check("已结束赛事判为结束", verdicts["已结束赛事"]["ended"] is True)
+        check("有未来节点强制进行中", verdicts["进行中赛事"]["ended"] is False)
+        check("模型输出的未知赛事被丢弃", len(verdicts) == 2)
+        check("证据标记全部节点已过", evidence[0]["allPast"] is True)
+        check("证据算出距最晚节点天数", evidence[0]["daysSinceLastNode"] == 67,
+              str(evidence[0]["daysSinceLastNode"]))
+        check("获奖名单算作收尾公告", evidence[0]["closingNotices"] >= 1)
+
+        first = plan(data_dir=tmp, contests=names, cfg={}, today=today,
+                     ai_cfg=aiconf, client=FakeAI(ai_out))
+        check("首轮判定 2 项", first.classified == 2, str(first.classified))
+        check("首轮仍扫全部（首次到期）", set(first.selection) == set(names))
+        save_state(str(Path(tmp, "zones.json")), first.state)
+
+        reloaded = load_state(str(Path(tmp, "zones.json")))
+        check("状态可持久化", reloaded["contests"]["已结束赛事"]["ended"] is True)
+        # 显式传 30：验证周期可配置（线上默认是 14 天）
+        second = plan(data_dir=tmp, contests=names,
+                      cfg={"ended_scan_days": 30}, today=today,
+                      ai_cfg=aiconf, client=FakeAI(ai_out))
+        check("同周期内已结束赛事不再扫", second.selection == ["进行中赛事"], str(second.selection))
+        monthly = plan(data_dir=tmp, contests=names,
+                       cfg={"ended_scan_days": 30}, today=date(2026, 12, 8),
+                       ai_cfg=aiconf, client=FakeAI(ai_out))
+        check("显式 30 天时满期复扫", set(monthly.selection) == set(names), str(monthly.selection))
+        check("到期复扫计数", monthly.due_ended == 1, str(monthly.due_ended))
+
+    # 11 月事故回归：收尾公告不能一票否决「已结束」判定；
+    # 通知里的未来日期必须像官方赛程节点一样被硬约束。
+    with tempfile.TemporaryDirectory() as tmp:
+        names2 = ["刚公示赛事", "仍有公示期赛事", "无赛程赛事"]
+        Path(tmp, "schedule.json").write_text(json.dumps({"contests": [
+            {"contest": "刚公示赛事", "finalEnd": "2026-09-01"},
+            {"contest": "仍有公示期赛事", "finalEnd": "2026-10-20"},
+        ]}, ensure_ascii=False), encoding="utf-8")
+        Path(tmp, "ai.json").write_text(json.dumps({"items": {
+            "v1": {"analysis": {"contest": "刚公示赛事", "stage": "公示",
+                                "events": [{"date": "2026-09-01", "label": "决赛"}]}},
+            "v2": {"analysis": {"contest": "仍有公示期赛事", "stage": "公示",
+                                "events": [{"date": "2026-11-20", "label": "异议反馈截止"}]}},
+            "v3": {"analysis": {"contest": "无赛程赛事", "stage": "公示",
+                                "events": []}},
+        }}, ensure_ascii=False), encoding="utf-8")
+        Path(tmp, "seen.json").write_text(json.dumps({"seen": {
+            "v1": {"title": "获奖名单公示", "date": "2026-09-02"},
+            "v2": {"title": "决赛结果公示", "date": "2026-10-27"},
+            "v3": {"title": "往届获奖公示与赛题宣讲回顾", "date": "2026-10-23"},
+        }}, ensure_ascii=False), encoding="utf-8")
+        ev2 = collect_evidence(tmp, names2, date(2026, 11, 7))
+        check("公示通知本身不产生未来节点", ev2[0]["futureEventCount"] == 0)
+        check("公示截止日算未来事件", ev2[1]["futureEventCount"] == 1)
+        conservative = {"contests": [
+            {"name": "刚公示赛事", "ended": False, "reason": "公示期未明确截止，后续事项未收尾"},
+            {"name": "仍有公示期赛事", "ended": True, "reason": "决赛已结束"},
+            {"name": "无赛程赛事", "ended": True, "reason": "仅见往届公示，推测已结束"},
+        ]}
+        v2 = classify(ev2, date(2026, 11, 7), aiconf, client=FakeAI(conservative))
+        check("模型保守误判被代码纠正为已结束", v2["刚公示赛事"]["ended"] is True)
+        check("纠正后理由写明依据", "已结束" in v2["刚公示赛事"]["reason"])
+        check("通知里的未来截止日强制进行中", v2["仍有公示期赛事"]["ended"] is False)
+        check("未来事件理由写明硬约束", "未来时间节点" in v2["仍有公示期赛事"]["reason"])
+        check("缺少官方赛程时强制进行中", v2["无赛程赛事"]["ended"] is False)
+        check("缺赛程理由写明 fail-open", "官方赛程缺少" in v2["无赛程赛事"]["reason"])
+
+    from .ai.prompts import load_prompt
+    spec = load_prompt("contest_status")
+    check("提示词把收尾公告定义为结束证据", "收尾信号" in spec.system)
+    check("提示词要求 allPast 判已结束", "allPast" in spec.system and "ended: true" in spec.system)
+
+    # 配置联动守卫：复扫间隔超过推送窗口时，复扫才发现的通知只会归档、不推送。
+    # 2026-11-07 起三个周期统一为 14 天（判定复核 / 复扫 / 推送窗口）。
+    import yaml
+    from .contests import DEFAULT_CHECK_DAYS, DEFAULT_ENDED_SCAN_DAYS
+    cfg_yaml = yaml.safe_load(
+        (Path(__file__).resolve().parent.parent / "config.yaml").read_text(encoding="utf-8")
+    )
+    check("判定复核周期默认 14 天", DEFAULT_CHECK_DAYS == 14, str(DEFAULT_CHECK_DAYS))
+    check("复扫间隔默认 14 天", DEFAULT_ENDED_SCAN_DAYS == 14, str(DEFAULT_ENDED_SCAN_DAYS))
+    check("配置与代码默认值一致",
+          cfg_yaml["contest_status"]["check_days"] == DEFAULT_CHECK_DAYS
+          and cfg_yaml["contest_status"]["ended_scan_days"] == DEFAULT_ENDED_SCAN_DAYS)
+    check("推送窗口为 14 天", cfg_yaml["push_max_age_days"] == 14)
+    check("复扫间隔不超过推送窗口",
+          cfg_yaml["contest_status"]["ended_scan_days"] <= cfg_yaml["push_max_age_days"])
+
+    # 每天两轮的分工：更新慢的源只在上午那轮抓，第二轮不再请求它们。
+    cfg_two = {"sources": [
+        {"key": "cpipc", "contest": 6, "max_pages": 1, "runs": "twice"},
+        {"key": "cpipc_pw", "channel": "notice", "max_pages": 1, "runs": "daily"},
+        {"key": "cpipc_pw", "channel": "document", "max_pages": 1, "runs": "daily"},
+        {"key": "cie", "max_pages": 2, "runs": "daily"},
+    ]}
+    pass_one = build_sources(cfg_two, first_pass=True)
+    pass_two = build_sources(cfg_two, first_pass=False)
+    check("第一轮扫全部源", len(pass_one) == 4, str(len(pass_one)))
+    check("第二轮只扫高变化源", [s.key for s in pass_two] == ["cpipc"],
+          str([s.key for s in pass_two]))
+    check("第二轮不含年度栏目与学会公告",
+          all(getattr(s, "channel", "") != "notice" for s in pass_two) and len(pass_two) == 1)
+    check("runs 缺省视为两轮都扫",
+          len(build_sources({"sources": [{"key": "cpipc", "contest": 6}]}, first_pass=False)) == 1)
+
+    # 配置与调度的一致性：两轮时刻、摘要窗口、页数都要对得上
+    src_cfg = cfg_yaml["sources"]
+    daily_keys = [
+        s.get("channel") or s["key"] for s in src_cfg
+        if str(s.get("runs", "twice")).lower() == "daily"
+    ]
+    check("年度栏目 / 大赛文件 / 学会公告只扫一轮",
+          sorted(daily_keys) == ["cie", "document", "notice"], str(sorted(daily_keys)))
+    zones_src = next(s for s in src_cfg if s["key"] == "cpipc_zones")
+    check("赛事专区两轮都扫", str(zones_src.get("runs", "twice")) == "twice")
+    check("所有源只取 1–2 页", all(int(s.get("max_pages", 1)) <= 2 for s in src_cfg),
+          str([s.get("max_pages") for s in src_cfg]))
+    wf = yaml.safe_load(
+        (Path(__file__).resolve().parent.parent / ".github/workflows/notify.yml").read_text(encoding="utf-8")
+    )
+    cron = wf[True]["schedule"][0]["cron"]
+    check("定时任务每天两轮", cron == "0 2,12 * * *", cron)
+    first_utc = int(cron.split()[1].split(",")[0])
+    check("首轮 UTC 时刻换算后等于 digest_hour",
+          (first_utc + 8) % 24 == cfg_yaml["digest_hour"],
+          f"{first_utc}+8 vs {cfg_yaml['digest_hour']}")
+    check("第二轮不与摘要窗口重叠",
+          not in_digest_window(_dt(2026, 11, 7, 20, 0), cfg_yaml["digest_hour"]))
+
+    # AI 失败必须 fail-open：全部按进行中扫描，不缓存判定
+    with tempfile.TemporaryDirectory() as tmp:
+        class FailAI:
+            def complete(self, system, user): raise AiClientError("网络不可用")
+        failed = plan(data_dir=tmp, contests=["甲", "乙"], cfg={},
+                      today=date(2026, 11, 7), ai_cfg=aiconf, client=FailAI())
+        check("AI 失败时全部按进行中扫描", set(failed.selection) == {"甲", "乙"})
+        check("AI 失败标记", failed.ai_failed is True)
+        off = plan(data_dir=tmp, contests=["甲", "乙"], cfg={"enabled": False},
+                   today=date(2026, 11, 7), ai_cfg=aiconf, client=FailAI())
+        check("关闭判定后不改变扫描范围", set(off.selection) == {"甲", "乙"})
+    # 旧版轮询状态（version=1）应被丢弃而不是误读
+    with tempfile.TemporaryDirectory() as tmp:
+        Path(tmp, "zones.json").write_text('{"version":1,"offset":4,"lastSweep":"2026-11-07"}',
+                                           encoding="utf-8")
+        check("旧轮询状态被安全丢弃", load_state(str(Path(tmp, "zones.json")))["contests"] == {})
+
+    print("\n[9g] 只读模式 / 抓取合规 / 事务边界 / 默认值")
+    src_main = (Path(__file__).with_name("main.py")).read_text(encoding="utf-8")
+    src_body = (Path(__file__).with_name("ai") / "body.py").read_text(encoding="utf-8")
+    src_dispatch = (Path(__file__).with_name("dispatch.py")).read_text(encoding="utf-8")
+    check("只读模式统一判定", "read_only = bool(args.check or args.preview or args.dry_run)" in src_main)
+    check("只读模式会还原本地状态",
+          "_snapshot_local_state" in src_main and "_restore_local_state" in src_main)
+    check("详情抽检只在写状态模式", "writes_state and not first_run" in src_main)
+    check("正文回填走统一抓取层", "fetch.get_text" in src_body)
+    check("正文回填不再伪装浏览器", "Mozilla" not in src_body and "requests.get" not in src_body)
+    check("正文回填保留主机白名单", "_host_allowed" in src_body)
+    check("即时失败与快报失败分开记账",
+          "instant_failed" in src_dispatch and "result.instant_failed" in src_main)
+    check("推送窗口默认值对齐 config", 'cfg.get("push_max_age_days", 14)' in src_main)
+    check("追赶阈值默认值对齐 config", 'cfg.get("catchup_threshold", 10)' in src_main)
+
+    from . import main as main_mod
+    from .schedule import ScheduleStore
+    with tempfile.TemporaryDirectory() as tmp:
+        origin = main_mod.DATA_DIR
+        main_mod.DATA_DIR = tmp
+        try:
+            seen = Path(tmp, "seen.json")
+            seen.write_text('{"seen":{}}', encoding="utf-8")
+            main_mod._snapshot_local_state()
+            seen.write_text('{"seen":{"x":1}}', encoding="utf-8")
+            main_mod._restore_local_state()
+            check("只读模式退出后还原本地状态", '"x"' not in seen.read_text(encoding="utf-8"))
+        finally:
+            main_mod.DATA_DIR = origin
+        st = ScheduleStore(str(Path(tmp, "schedule.json")))
+        st.updated_at = "2026-11-01T00:00:00"  # 无时区时间戳
+        check("无时区赛程时间戳不崩溃", isinstance(st.stale(7), bool))
 
     print("\n[10] 归档同步不会被「无新公告」提前返回跳过")
     # 回归守卫：同步曾写在 `if not fresh: return 0` 之后，导致没有新公告时
@@ -647,6 +904,21 @@ def main() -> int:
     check("只抓订阅者关注的赛事", only and only[0].contests == ["人工智能创新大赛"],
           str([s.contests for s in only]))
     check("无人关注时跳过专区源", build_sources(cfg_zones, only_contests=set()) == [])
+    # 每轮全量扫：一轮必须覆盖所有可扫专区（19 个），不靠游标分片；
+    # 20 项赛事里「乡村振兴」没有独立专区（zoneId 为空）。
+    all_zones = [c for c, cid in CONTEST_IDS.items() if cid]
+    cfg_all = {"sources": [{
+        "key": "cpipc_zones", "enabled": True, "contests": all_zones,
+    }]}
+    full = build_sources(cfg_all, only_contests=set(all_zones))
+    check("一轮全量扫覆盖全部 19 个专区",
+          full and len(full[0].contests) == 19, str(len(full[0].contests) if full else 0))
+    check("一轮全量扫无重复专区",
+          len(set(full[0].contests)) == len(full[0].contests))
+    check("无专区赛事不会进入扫描列表", "乡村振兴科技强农+创新大赛" not in full[0].contests)
+    check("全量扫不使用轮询游标",
+          full[0].offset == 0 and full[0].per_run == 19,
+          f"offset={full[0].offset} per_run={full[0].per_run}")
 
     html = build_html(
         [n_edc, n_ai],

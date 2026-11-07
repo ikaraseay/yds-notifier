@@ -11,13 +11,12 @@ from __future__ import annotations
 
 import argparse
 import atexit
-import json
 import logging
 import os
 import re
 import sys
 from concurrent.futures import ThreadPoolExecutor
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
 from typing import Dict, List
 
 import yaml
@@ -28,6 +27,7 @@ from .ai.body import backfill_bodies
 from .ai.cache import AiCache
 from .ai.client import AiConfig
 from .config import settings
+from .contests import plan as plan_contest_scan, save_state as save_contest_state
 from .dispatch import dispatch
 from .lock import RunLock
 from .mailer import build_html, build_text, sort_notices
@@ -51,13 +51,62 @@ from .schedule import (
 )
 from .sources import BaseSource, build_sources
 from .state import State
-from .store import StateConflict, StateUnavailable, build_store
+from .store import STATE_FILES, StateConflict, StateUnavailable, build_store
 from .unsub import build_unsubscribe_url
 
 log = logging.getLogger("yds")
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT, "data")
+
+# 只读模式（--check / --dry-run / --preview）仍需要远端真实状态才能正确判断
+# 「哪些是新通知」，但 pull() 会用 R2 对象覆盖本地 data/*.json。为了让
+# `python -m yds --check` 不污染工作区，运行前把本地状态记在内存里，
+# 退出时还原。放在 atexit 里，覆盖 main() 的所有提前 return 分支。
+_LOCAL_STATE_BACKUP: Dict[str, bytes | None] = {}
+
+
+def _snapshot_local_state() -> None:
+    for name in STATE_FILES:
+        try:
+            with open(os.path.join(DATA_DIR, name), "rb") as fh:
+                _LOCAL_STATE_BACKUP[name] = fh.read()
+        except OSError:
+            _LOCAL_STATE_BACKUP[name] = None
+
+
+def _restore_local_state() -> None:
+    if not _LOCAL_STATE_BACKUP:
+        return
+    for name, blob in _LOCAL_STATE_BACKUP.items():
+        path = os.path.join(DATA_DIR, name)
+        try:
+            if blob is None:
+                if os.path.exists(path):
+                    os.remove(path)
+            else:
+                with open(path, "wb") as fh:
+                    fh.write(blob)
+        except OSError as exc:
+            log.warning("只读模式恢复本地状态失败 %s：%s", name, exc)
+    _LOCAL_STATE_BACKUP.clear()
+
+
+def _ai_config() -> AiConfig:
+    """AI 客户端配置，赛事状态判定与通知分析共用同一份。"""
+    return AiConfig(
+        enabled=settings.ai_enabled,
+        api_key=settings.ai_api_key,
+        base_url=settings.ai_base_url,
+        model=settings.ai_model,
+        thinking=settings.ai_thinking,
+        temperature=settings.ai_temperature,
+        max_tokens=settings.ai_max_tokens,
+        timeout=settings.ai_timeout,
+        batch_size=settings.ai_batch_size,
+        max_body_chars=settings.ai_max_body_chars,
+        prompt_version="",  # 实际版本由 prompts/manifest.yaml 的 active 决定
+    )
 
 
 def _push_state(store) -> None:
@@ -98,31 +147,6 @@ def _mark_push_failed(path: str, reason: str) -> None:
 def load_config(path: str) -> dict:
     with open(path, encoding="utf-8") as fh:
         return yaml.safe_load(fh) or {}
-
-
-def _load_zone_state(path: str) -> dict:
-    """读取专区游标：offset 为下一轮起点，lastSweep 为最近一次全量扫描日期。"""
-    try:
-        with open(path, encoding="utf-8") as fh:
-            raw = json.load(fh)
-        return {
-            "offset": max(0, int(raw.get("offset") or 0)),
-            "lastSweep": str(raw.get("lastSweep") or ""),
-        }
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return {"offset": 0, "lastSweep": ""}
-
-
-def _save_zone_state(path: str, offset: int, last_sweep: str) -> None:
-    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as fh:
-        json.dump(
-            {"version": 1, "offset": offset, "lastSweep": last_sweep},
-            fh, ensure_ascii=False,
-        )
-        fh.write("\n")
-    os.replace(tmp, path)
 
 
 def collect(sources: List[BaseSource], enrich: bool = True, workers: int = 0) -> List[Notice]:
@@ -184,8 +208,25 @@ def _safe_enrich(src: BaseSource, item: Notice):
 
 
 def collect_meta(sources: List[BaseSource]) -> List[Notice]:
-    """只抓列表页：高频轮询下先判断有没有变化，再决定是否抓详情。"""
+    """只抓列表页：先判断有没有变化，再决定是否抓详情。"""
     return collect(sources, enrich=False)
+
+
+def pick_detail_checks(items: List[Notice], state, limit: int, today: date) -> List[str]:
+    """挑出今天要复核详情页的条目：最近的、且最久没复核的优先。
+
+    候选限于「已读、发布不超过 30 天」的条目（更早的正文修订意义很小）。
+    排序为先按发布时间倒序、再按上次复核日期稳定升序（空串=从未复核排最前），
+    这样抽检在一圈内覆盖全部近期条目，而不是每天重复同一批最近通知。
+    """
+    cutoff = today - timedelta(days=30)
+    recent = [
+        n for n in items
+        if state.classify(n) == "same" and (not n.published or n.published >= cutoff)
+    ]
+    ordered = sorted(recent, key=lambda x: x.date_text, reverse=True)
+    ordered.sort(key=lambda x: state.detail_checked_at(x.uid))
+    return [n.uid for n in ordered[:limit]]
 
 
 def enrich_only(sources: List[BaseSource], wanted: set) -> List[BaseSource]:
@@ -227,21 +268,28 @@ def main(argv: List[str] | None = None) -> int:
     cfg = load_config(args.config)
     if args.max_notify:
         cfg["max_notify"] = args.max_notify
+    # .env 由 config 模块加载；fetch 在它之前就已 import，这里补读一次，
+    # 保证本地运行时 RESPECT_ROBOTS / CRAWLER_UA 也能生效（CI 直接注入则等价）。
+    fetch.configure_from_env()
     fetch.reset_stats()
+    ai_cfg = _ai_config()
 
-    # 只有会读-改-写状态的运行才需要独占：--check / --preview 是只读的，
-    # --dry-run 也不落盘。其余模式（定时任务、--backfill）互相排斥，
-    # 否则后写者会覆盖前者的 seen.json，导致下一轮重复发信。
-    writes_state = not (args.check or args.preview or args.dry_run)
+    # 只读模式不写状态、不占运行锁；其余模式（定时任务、--backfill）互斥，
+    # 否则后写者会覆盖前者的 seen.json。
+    read_only = bool(args.check or args.preview or args.dry_run)
+    writes_state = not read_only
     run_lock = RunLock(os.path.join(ROOT, "data/.run.lock"))
     if writes_state and not run_lock.acquire():
         log.error("已有一个实例在运行（data/.run.lock 被占用），本轮跳过以免重复发信 / 覆盖状态")
         return 2
 
-    # 状态后端：配置了 R2 就把 data/*.json 从对象存储拉下来（远端是唯一事实源），
-    # 结束时由 atexit 统一写回。未配置时完全走本地文件，行为与改造前一致。
+    # 状态后端：R2 是唯一事实源，运行前把状态对象拉到本地，运行后由 atexit 写回。
+    # 只读模式只用远端状态做判定，退出时还原本地 data/*.json。
     store = build_store(settings)
     if store:
+        if read_only:
+            _snapshot_local_state()
+            atexit.register(_restore_local_state)
         try:
             pulled = store.pull(DATA_DIR)
         except StateUnavailable as exc:
@@ -266,48 +314,51 @@ def main(argv: List[str] | None = None) -> int:
         personas=cfg.get("personas") or [],
     )
 
-    # 赛事专区抓取范围 = 所有订阅者关注赛事的并集；没人限制时按 per_run 轮询。
+    # 赛事专区抓取范围 = 所有订阅者关注赛事的并集 ∩ 本轮该扫的赛事。
+    # AI 判定为「已结束」的赛事默认 14 天才扫一次，进行中的每轮都扫。
     watched = watched_contests(recipients)
     zone_cfg = next(
         (s for s in (cfg.get("sources") or []) if s.get("key") == "cpipc_zones" and s.get("enabled", True)),
         {},
     )
     zone_all = [str(c) for c in (zone_cfg.get("contests") or []) if CONTEST_IDS.get(str(c))]
-    zone_per_run = max(1, int(zone_cfg.get("per_run", 4)))
-    zone_state_path = os.path.join(ROOT, "data/zones.json")
-    zone_state = _load_zone_state(zone_state_path)
-    zone_offset = zone_state["offset"] % len(zone_all) if zone_all else 0
-
-    # 轮询保证「每轮只看 4 项」，但要靠好几轮才能覆盖 19 项；
-    # 一旦 CI 被 GitHub 节流（实际常是几小时才跑一次），归档会长期缺赛事。
-    # 因此每 sweep_days 天强制全量扫一遍，一次补齐所有专区。
-    sweep_days = max(1, int(zone_cfg.get("sweep_days", 1)))
-    today_iso = date.today().isoformat()
-    sweep_due = (
-        watched is None and bool(zone_all) and bool(zone_cfg)
-        and (
-            not zone_state["lastSweep"]
-            or (date.today() - date.fromisoformat(zone_state["lastSweep"])).days >= sweep_days
-        )
+    candidates = sorted(set(zone_all) if watched is None else set(watched or []))
+    scan = plan_contest_scan(
+        data_dir=DATA_DIR,
+        contests=candidates,
+        cfg=cfg.get("contest_status") or {},
+        today=date.today(),
+        ai_cfg=ai_cfg,
     )
+    log.info(
+        "赛事状态：共 %s 项，本轮扫 %s 项（AI 判定 %s 项 / 已结束 %s 项，其中 %s 项到期复扫%s）",
+        len(candidates), len(scan.selection), scan.classified, scan.ended,
+        scan.due_ended, " / AI 不可用" if scan.ai_failed else "",
+    )
+    zone_selection = set(scan.selection)
+
+    # 每天两轮（北京时间 10:00 / 20:00）。第一轮扫全部源；第二轮只扫高变化源
+    # （runs: twice），年度通知 / 大赛文件 / 学会公告这类栏目一天最多一条，
+    # 抓两遍只是重复请求。GitHub 的 schedule 常延后 1–3 小时，所以 18:00 前
+    # 都按第一轮处理；只读模式与 --backfill 一律按第一轮跑，方便人工补齐数据。
+    first_pass = read_only or bool(args.backfill) or datetime.now().hour < 18
 
     def make_sources():
-        # 全量扫描：把 19 项赛事当作「全部关注」，per_run 自动等于总数、offset 归零
-        if sweep_due:
-            return build_sources(cfg, only_contests=set(zone_all), zone_offset=0)
-        return build_sources(cfg, only_contests=watched, zone_offset=zone_offset)
+        # 详情抓取阶段重建数据源时必须复用同一份赛事选择，避免扫到本轮跳过的专区
+        return build_sources(cfg, only_contests=zone_selection, first_pass=first_pass)
 
     sources = make_sources()
     if not sources:
         log.error("没有启用任何数据源，请检查 %s", args.config)
         return 2
+    if not first_pass:
+        log.info("本轮为当天第二轮：只抓高变化源（runs: twice），年度栏目 / 学会公告留到明早")
     if zone_cfg:
-        if sweep_due:
-            log.info("赛事专区：全量扫描 %s 项（上次全量：%s）", len(zone_all), zone_state["lastSweep"] or "从未")
-        elif watched is None:
-            log.info("赛事专区：无人限制赛事，按每轮 %s 项轮询（共 %s 项）", zone_per_run, len(zone_all))
+        if watched is None:
+            log.info("赛事专区：每轮扫描 %s / %s 项（进行中每天扫，已结束按 14 天复扫）",
+                     len(zone_selection), len(zone_all))
         else:
-            log.info("赛事专区：只抓订阅者关注的 %s 项赛事", len(watched or []))
+            log.info("赛事专区：订阅者关注 %s 项，本轮扫描 %s 项", len(watched or []), len(zone_selection))
     needs_send = not (args.check or args.preview or args.backfill)
     if needs_send:
         if not recipients:
@@ -325,17 +376,13 @@ def main(argv: List[str] | None = None) -> int:
     robots_note = fetch.robots_summary()
     if robots_note:
         log.warning("%s（RESPECT_ROBOTS=%s）", robots_note, fetch.RESPECT_ROBOTS)
-    # 无人限制赛事时推进专区分片游标，保证几轮之后 19 项赛事都被扫过
-    if zone_cfg and watched is None and zone_all:
-        next_offset = 0 if sweep_due else (zone_offset + zone_per_run) % len(zone_all)
-        next_sweep = today_iso if sweep_due else zone_state["lastSweep"]
-        if not (args.check or args.preview or args.dry_run):
-            _save_zone_state(zone_state_path, next_offset, next_sweep)
-        log.info("赛事专区游标 %s → %s（下一轮从该位置继续）", zone_offset, next_offset)
     if not meta:
         # 官网改版 / 全站不可达时必须让 CI 变红，不能伪装成「无新公告」
         log.error("列表页 0 条：疑似官网改版或抓取全部失败，请检查数据源与解析器")
         return 1
+    # 抓取成功才记账：否则本轮没扫到的「已结束赛事」会被误记为已扫、白等 14 天
+    if writes_state and not args.backfill:
+        save_contest_state(os.path.join(DATA_DIR, "zones.json"), scan.state)
 
     # --- 官方赛程：每周刷新一次，驱动日历与 T-30/T-7/T-3/T-1 提醒 ------------
     today_date = date.today()
@@ -354,10 +401,10 @@ def main(argv: List[str] | None = None) -> int:
                 )
             except Exception as exc:  # noqa: BLE001 - 赛程失败不能影响通知主流程
                 log.warning("赛程表解析失败，沿用旧缓存：%s", str(exc)[:160])
-            if rows:
-                schedule.replace(rows, schedule_year(target.title, today_date.year), target.url)
-                if not args.check and not args.preview:
-                    schedule.save()
+                if rows:
+                    schedule.replace(rows, schedule_year(target.title, today_date.year), target.url)
+                    if writes_state:
+                        schedule.save()
                 log.info("赛程表已更新：%s 项赛事（%s 年度）", len(rows), schedule.year)
         else:
             log.info("本轮列表中没有「赛程一览」，跳过刷新（沿用缓存 %s 项）", len(schedule.contests))
@@ -380,7 +427,7 @@ def main(argv: List[str] | None = None) -> int:
     candidates: List[Notice] = []
     # 扩充数据源后，专区里的上年旧通知会被当成「新条目」。
     # 超过 push_max_age_days 的只归档、不推送，避免首次升级群发陈年旧文。
-    max_age = max(7, int(cfg.get("push_max_age_days", cfg.get("max_age_days", 60))))
+    max_age = max(7, int(cfg.get("push_max_age_days", 14)))
     cutoff = today_date - timedelta(days=max_age)
     stale_skipped = 0
     stale_items: List[Notice] = []
@@ -407,15 +454,14 @@ def main(argv: List[str] | None = None) -> int:
     # --- 每日一次详情抽检：发现同一文章 ID 下的正文 / 附件修订 ---------------
     today = date.today().isoformat()
     full_check = bool(
-        not first_run and not args.check and not args.preview
+        writes_state and not first_run
         and state.last_detail_check() != today
     )
     check_uids: set = set()
     if full_check:
-        limit = max(1, int(cfg.get("full_check_limit", 30)))
-        seen = [n for n in meta if state.classify(n) == "same"]
-        check_uids = {n.uid for n in sorted(seen, key=lambda x: x.date_text, reverse=True)[:limit]}
-        log.info("每日详情抽检 %s 条（用于发现正文 / 附件更新）", len(check_uids))
+        limit = max(1, int(cfg.get("full_check_limit", 12)))
+        check_uids = set(pick_detail_checks(meta, state, limit, date.today()))
+        log.info("每日详情抽检 %s 条（按上次复核时间轮转，用于发现正文 / 附件更新）", len(check_uids))
 
     # --- 第二轮：只抓候选 + 抽检条目的详情页 --------------------------------
     wanted = {n.uid for n in candidates} | check_uids
@@ -443,7 +489,7 @@ def main(argv: List[str] | None = None) -> int:
             log.info("检测到内容更新：%s", d.title)
 
     if detailed:
-        state.record_detail_baseline(detailed)
+        state.record_detail_baseline(detailed, today)
     if full_check:
         state.touch_detail_check(today)
 
@@ -472,19 +518,6 @@ def main(argv: List[str] | None = None) -> int:
     # --- AI 分析：批量 + 指纹缓存 + 渐进式历史回填 ----------------------------
     # 收敛后（所有 uid 都有缓存）无新公告时零 API 调用；提示词升版全量重算。
     if not args.dry_run and not args.preview:
-        ai_cfg = AiConfig(
-            enabled=settings.ai_enabled,
-            api_key=settings.ai_api_key,
-            base_url=settings.ai_base_url,
-            model=settings.ai_model,
-            thinking=settings.ai_thinking,
-            temperature=settings.ai_temperature,
-            max_tokens=settings.ai_max_tokens,
-            timeout=settings.ai_timeout,
-            batch_size=settings.ai_batch_size,
-            max_body_chars=settings.ai_max_body_chars,
-            prompt_version="",  # 实际版本由 prompts/manifest.yaml 的 active 决定
-        )
         ai_inputs = [
             {
                 "uid": n.uid,
@@ -506,11 +539,12 @@ def main(argv: List[str] | None = None) -> int:
             for h in (s.get("allowed_hosts") or [])
         })
         # body 构建时已尝试从缓存读回；仍为空才需要抓详情页。
-        # 抓到的正文立刻入缓存，因此 AI 关闭 / 调用失败时也不会每 10 分钟重复抓官网。
+        # 抓到的正文立刻入缓存，因此 AI 关闭 / 调用失败时也不会每轮重复抓官网。
+        # 只在当天第一轮回填：历史正文不急于当天补完，第二轮再抓一遍纯属重复请求。
         need = [i for i in ai_inputs if not i["body"]]
         got = backfill_bodies(
             need, hosts,
-            max(0, int(cfg.get("ai_backfill_limit", 12))),
+            max(0, int(cfg.get("ai_backfill_limit", 12))) if first_pass else 0,
             settings.ai_max_body_chars,
         )
         if got:
@@ -533,28 +567,29 @@ def main(argv: List[str] | None = None) -> int:
     # 与「本轮有没有新公告」无关：首次升级要回填历史，官网补充 / 延期也要更新归档。
     # 用内容指纹限流，只有真的变了才写 Worker KV；失败只告警，绝不阻断邮件主流程。
     archive_changed = False
+    payload_count = 0
     if not args.dry_run and not args.preview:
         payload = build_payload(
             list(all_items.values()),
             int(cfg.get("notices_limit", 200)),
             schedule=schedule.payload(sched_include) if sched_enabled else None,
         )
+        payload_count = len(payload.get("notices", []))
         fp = payload_fingerprint(payload)
         if fp != state.published_hash and publish_notices(payload):
             state.set_published_hash(fp)
             archive_changed = True
 
     if args.backfill:
-        # 只补归档 / 日历数据：不写 seen（否则 CI 下一轮就不发邮件了）、不发信
-        count = len(payload.get("notices", [])) if not args.dry_run else 0
-        if not args.dry_run:
+        # 只同步归档 / 日历：不调用 state.mark()（不新增已读记录），不发信。
+        if writes_state:
             state.save()
-        log.info("backfill 完成：归档同步 %s 条，未发信、未标记已读", count)
+        log.info("backfill 完成：归档同步 %s 条，未发信、未标记已读", payload_count)
         return 0
 
     if not merged and not args.preview and not reminders:
         # 没有新内容：只在抽检刷新过指纹 / 归档有更新 / 刚标了超龄条目时落盘
-        if full_check or archive_changed or stale_marked:
+        if writes_state and (full_check or archive_changed or stale_marked):
             state.save()
         else:
             log.info("无新公告，结束（未抓取详情页推送）")
@@ -576,14 +611,14 @@ def main(argv: List[str] | None = None) -> int:
         size = int(cfg.get("baseline_size", 8))
         fresh = sort_notices(by_recency(fresh)[:size])
         log.info("首次运行，建立基线（%s 条），本轮推送最近 %s 条", len(meta), len(fresh))
-    elif len(fresh) > int(cfg.get("catchup_threshold", 15)):
+    elif len(fresh) > int(cfg.get("catchup_threshold", 10)):
         # 扩充数据源 / 长时间停摆后，单轮会出现几十条「新条目」。
         # 一次性全发既吵又容易进垃圾箱：只推最近 N 条（按发布时间），其余静默归档。
         size = max(1, int(cfg.get("catchup_size", 8)))
         catchup_dropped = max(0, len(fresh) - size)
         log.info(
             "单轮新增 %s 条超过阈值 %s，按追赶模式只推最近 %s 条（按发布时间），其余 %s 条静默归档",
-            len(fresh), cfg.get("catchup_threshold", 15), size, catchup_dropped,
+            len(fresh), cfg.get("catchup_threshold", 10), size, catchup_dropped,
         )
         fresh = sort_notices(by_recency(fresh)[:size])
 
@@ -599,7 +634,7 @@ def main(argv: List[str] | None = None) -> int:
         return 0
 
     if not fresh and not reminders:
-        if expired:
+        if expired and writes_state:
             # 全部过期时也要落盘「已读」，否则下一轮会把它们再当初次发现
             state.save()
         log.info("没有新通知，本轮不发信")
@@ -632,11 +667,19 @@ def main(argv: List[str] | None = None) -> int:
         len(fresh), len(recipients), result.sent, result.digest_sent or "无",
     )
 
-    if result.failed:
-        # 关键事务边界：有即时收件人失败就不写 seen，下一轮会重发
-        log.error("以下收件人发送失败（本轮不标记已读，下轮重试）：%s", ", ".join(result.failed))
+    if result.instant_failed:
+        # 关键事务边界：即时通知有收件人失败就不写 seen，下一轮整批重试
+        log.error(
+            "以下收件人的即时通知发送失败（本轮不标记已读，下轮重试）：%s",
+            ", ".join(result.instant_failed),
+        )
         state.save()  # 只保存抽检指纹 / 归档指纹，不保存 mark
         return 1
+
+    other_failed = [e for e in result.failed if e not in result.instant_failed]
+    if other_failed:
+        # 紧急快报 / 日程提醒失败按各自机制重试，不影响本轮 seen 事务
+        log.warning("快报或日程提醒发送失败（不阻断本轮）：%s", ", ".join(other_failed))
 
     # 提醒是时点性的：发送成功才记账，失败下轮重试
     if reminders:

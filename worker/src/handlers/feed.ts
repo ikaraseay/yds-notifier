@@ -26,7 +26,7 @@ import {
   type FeedPayload,
   type Notice,
 } from '../feed/types';
-import { esc, safeEqual, securityHeaders, signEmailToken, verifyEmailToken } from '../security';
+import { cacheControl, esc, safeEqual, securityHeaders, signEmailToken, verifyEmailToken } from '../security';
 import { renderArchive, renderArchiveError } from '../ui/archive';
 import { jsonResp, page } from '../ui/layout';
 
@@ -256,11 +256,11 @@ function icalEsc(v: unknown): string {
 
 /* ---------------------------- 响应头 ---------------------------- */
 
-/** 合并安全头，但把 no-store 换成可缓存的 public。 */
+/** 合并安全头，把 no-store 换成可缓存的 public（仍保留 no-transform）。 */
 function cacheableHeaders(contentType: string, extra: Record<string, string> = {}): Record<string, string> {
   const h: Record<string, string> = { ...securityHeaders() };
-  delete h['Cache-Control'];
-  return { ...h, 'Content-Type': contentType, 'Cache-Control': 'public, max-age=600', ...extra };
+  h['Cache-Control'] = cacheControl(600);
+  return { ...h, 'Content-Type': contentType, ...extra };
 }
 
 /* ---------------------------- 1. 写入接口 ---------------------------- */

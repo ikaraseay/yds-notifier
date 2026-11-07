@@ -1,7 +1,7 @@
 """已推送记录的持久化。
 
-GitHub Actions 每次都从干净环境跑，状态必须落盘并提交回仓库
-（workflow 里 git commit data/seen.json 与 data/pending.json）。结构：
+GitHub Actions 每次都从干净环境跑，状态默认写回 R2，未配置凭证时落盘并由
+workflow 的 git 回写步骤提交（data/seen.json 与 data/pending.json）。结构：
 
 {
   "version": 2,
@@ -104,12 +104,23 @@ class State:
         self.initialized = True
         self._prune()
 
-    def record_detail_baseline(self, notices: Iterable[Notice]) -> None:
-        """每日抽检后只刷新 detailHash，不改 notified，也不触发推送。"""
+    def record_detail_baseline(self, notices: Iterable[Notice], day: str = "") -> None:
+        """每日抽检后只刷新 detailHash，不改 notified，也不触发推送。
+
+        同时记下本次复核日期（day），下一轮据此挑「最久没复核」的条目，
+        避免每天重复抽同一批最近通知、更早的条目永远轮不到。
+        """
         for n in notices:
             rec = self.data.get(n.uid)
             if rec:
                 rec["detailHash"] = n.detail_hash
+                if day:
+                    rec["detailCheckedAt"] = day
+
+    def detail_checked_at(self, uid: str) -> str:
+        """该条目上次正文复核日期；空串表示从未复核（抽检时优先）。"""
+        rec = self.data.get(uid) or {}
+        return str(rec.get("detailCheckedAt") or "")
 
     def _prune(self) -> None:
         """只保留最近 keep 条，防止状态文件无限膨胀。"""

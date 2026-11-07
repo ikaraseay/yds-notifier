@@ -123,15 +123,17 @@ def _persona_block(notices: Sequence[Notice], roles: Sequence[str] = ()) -> str:
     """邮件顶部按角色分组的摘要，只包含收件人自己订阅的角色。
 
     `roles` 为空表示「不限制」（站长邮箱或偏好字段缺失），此时才展示全部角色。
-    同一条通知只归到它命中的第一个角色下，避免三个视角把同一条重复三遍。
+    同一条通知允许同时出现在它适用的多个角色下：读者只关心自己那一栏，
+    重复比遗漏好（曾改为「只归首个命中角色」，结果几乎全部通知都含 student，
+    四个角色被折叠成一个，勾选全部视角的用户反而只看到「参赛学生」）。
     """
     order = [a for a in AUDIENCES if not roles or a in roles]
     buckets: dict = {a: [] for a in order}
     for n in notices:
+        hits = set(n.audiences or [])
         for aud in order:
-            if aud in (n.audiences or []):
+            if aud in hits:
                 buckets[aud].append(n)
-                break
     rows = []
     for aud in order:
         items = buckets[aud]

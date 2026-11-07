@@ -1,7 +1,7 @@
 """单实例运行锁。
 
-为什么需要：状态（seen / ai / pending / zones）是文件 + git 提交，本轮运行期间
-会读-改-写。CI 里有 `concurrency: yds-notify` 串行化，但**本地 `--backfill`
+为什么需要：状态（seen / ai / pending / zones）默认存 R2、未配置时为本地文件，
+本轮运行期间会读-改-写。CI 里有 `concurrency: yds-notify` 串行化，但**本地 `--backfill`
 与定时任务同时跑**时两者各写一份，后写者覆盖前者，`seen` 回退 → 下一轮重复发信。
 这类故障一旦发生，表现是"订阅者收到重复邮件"，很难与代码 bug 区分。
 

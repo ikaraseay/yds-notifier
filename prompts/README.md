@@ -14,6 +14,8 @@ prompts/
 │   └── v2.system.md / v2.user.md # 当前版：另加赛事 / 阶段 / 人群 / 行动建议
 ├── digest/
 │   └── v1.system.md              # 摘要邮件导语（预留，尚未启用）
+├── contest_status/
+│   └── v1.system.md / v1.user.md # 赛事是否已结束（已结束赛事降为每 14 天扫描）
 └── schemas/
     ├── analysis.schema.json      # v1 输出契约
     ├── analysis.v2.schema.json   # v2 输出契约（draft-07）
