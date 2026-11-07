@@ -2,7 +2,10 @@
 
 seen.json 只存标题 / URL / 发布日期，AI 无法据此判断公告里的真实事件日。
 这里按 uid 逐个抓一次详情页，结果写进 ai.json 缓存，之后不再请求官网。
-严格约束：host 白名单、只 http/https、超时、限条数、失败静默跳过。
+
+网络请求统一走 `yds.fetch.get_text`，因此如实 UA、robots.txt 校验、
+同主机并发上限、同 URL 单飞、重试与统计对本路径同样生效。
+额外的 host 白名单只作为业务侧的 SSRF 二次校验。
 """
 
 from __future__ import annotations
@@ -11,16 +14,12 @@ import logging
 import re
 from urllib.parse import urlparse
 
-import requests
 from bs4 import BeautifulSoup
+
+from .. import fetch
 
 log = logging.getLogger("yds")
 
-# 与 fetch.py 的 UA 保持一致，避免被官网按 UA 区别对待
-_UA = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/120.0 Safari/537.36"
-)
 _CONTENT_SELECTORS = (".articleContent", ".headlines-news-content", "article", ".content", "body")
 _DROP_TAGS = ("script", "style", "nav", "footer", "header", "noscript", "iframe")
 
@@ -44,10 +43,7 @@ def fetch_body(url: str, allowed_hosts, max_chars: int = 3000, timeout: int = 8)
     if not url or not _host_allowed(url, allowed_hosts):
         return ""
     try:
-        resp = requests.get(url, headers={"User-Agent": _UA}, timeout=timeout)
-        resp.raise_for_status()
-        resp.encoding = resp.apparent_encoding or resp.encoding
-        soup = BeautifulSoup(resp.text, "html.parser")
+        soup = BeautifulSoup(fetch.get_text(url, timeout=timeout), "html.parser")
         for tag in soup.find_all(_DROP_TAGS):
             tag.decompose()
         node = None
@@ -61,7 +57,7 @@ def fetch_body(url: str, allowed_hosts, max_chars: int = 3000, timeout: int = 8)
         text = node.get_text(" ", strip=True)
         text = re.sub(r"\s+", " ", text)
         return text[:max_chars]
-    except Exception as exc:  # noqa: BLE001 - 官网不可达属常态，静默降级
+    except Exception as exc:  # noqa: BLE001 - 官网不可达 / robots 拦截属常态，静默降级
         log.debug("正文回填跳过 %s：%s", url, str(exc)[:100])
         return ""
 

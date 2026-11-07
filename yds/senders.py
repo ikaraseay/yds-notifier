@@ -5,7 +5,7 @@
   而且走 HTTPS(443) 出网，不受 GitHub Actions 封锁 25 端口的影响。
 - 保留 SMTP 是为了本地调试和兜底（Resend 出问题时可切回普通邮箱授权码）。
 
-统一接口：`build_client(config)` 按 config.yaml 的 mail.provider 返回具体实现。
+统一接口：`build_client(config)` 按环境变量 `MAIL_PROVIDER` 返回具体实现。
 """
 
 from __future__ import annotations

@@ -1,13 +1,14 @@
 """HTTP 抓取层：robots.txt 校验、会话复用、重试、进程内去重与并发限流。
 
-单轮要访问 13 个列表页 + 若干详情页。为了既快又不打疼官网，这里做四件事：
+单轮按赛事状态扫描 5 类常规栏目 + 进行中的赛事专区，外加候选通知的详情页。
+为了既快又不打疼官网，这里做四件事：
 
 1. **robots.txt 校验**：每主机取一次 robots.txt，命中 `Disallow` 的地址直接跳过，
    一个字节都不请求（`RESPECT_ROBOTS=enforce`，默认）。取不到 robots.txt 时
    按放行处理，避免官网抖一下就整轮停摆。
 2. **线程本地 Session**：多线程抓取时各自持有连接池，避免 requests.Session
    在多线程下共享连接引发的偶发乱序 / 连接复用问题。
-3. **同 URL 合并（single-flight）**：研电赛专区（cpipc）与专区轮询（cpipc_zones）
+3. **同 URL 合并（single-flight）**：研电赛专区（cpipc）与赛事专区（cpipc_zones）
    会命中同一个列表页地址，同一轮只真正请求一次，其余线程等待并复用结果。
 4. **每主机并发上限**：cpipc.acge.org.cn 同时最多 2 个在途请求，全局并发由
    调用方的线程池控制。宁可多花几秒，也不给官方站点制造瞬时压力。
@@ -46,7 +47,19 @@ def _ascii_ua(value: str) -> str:
 
 UA = _ascii_ua(os.environ.get("CRAWLER_UA") or DEFAULT_UA)
 
-# robots.txt 处理策略：enforce（默认，命中 Disallow 即跳过）/ warn（只记日志）/ off
+
+def configure_from_env() -> None:
+    """在 `.env` 加载完成后重新读取抓取相关环境变量。
+
+    fetch 在 config（负责 load_dotenv）之前被 import，模块级读取时 .env
+    还没生效；本地运行时会误用 enforce 默认值。CI 直接注入环境变量则等价。
+    """
+    global UA, RESPECT_ROBOTS
+    UA = _ascii_ua(os.environ.get("CRAWLER_UA") or DEFAULT_UA)
+    value = (os.environ.get("RESPECT_ROBOTS") or "enforce").strip().lower()
+    RESPECT_ROBOTS = value if value in ("enforce", "warn", "off") else "enforce"
+
+
 _MODE_ENV = (os.environ.get("RESPECT_ROBOTS") or "enforce").strip().lower()
 RESPECT_ROBOTS = _MODE_ENV if _MODE_ENV in ("enforce", "warn", "off") else "enforce"
 
@@ -104,7 +117,7 @@ def _robots_for(host: str) -> Optional[RobotsRules]:
     """取主机的 robots.txt 规则；取不到返回 None（按放行处理）。
 
     并发抓取时同一主机的 robots.txt 只真正请求一次：先查缓存，
-    再按主机加锁，避免 13 个线程同时打 /robots.txt。
+    再按主机加锁，避免并发线程同时打 /robots.txt。
     """
     with _robots_lock:
         if host in _robots_cache:

@@ -117,6 +117,14 @@ export function securityHeaders(): Record<string, string> {
   };
 }
 
+/**
+ * 可缓存响应的 Cache-Control。即便允许 CDN 缓存，也必须保留 no-transform：
+ * 中间层往 RSS / ICS / 文本资源里注入脚本同样会破坏内容与 CSP 语义。
+ */
+export function cacheControl(maxAgeSeconds: number): string {
+  return `public, max-age=${maxAgeSeconds}, no-transform`;
+}
+
 export function csp(nonce: string, allowScript: boolean): string {
   // img-src 只为站点图标放开 self：默认 default-src 'none' 会把 /favicon.svg 也拦掉，
   // 那样控制台只是把「404」换成「被 CSP 阻止」，问题没解决。

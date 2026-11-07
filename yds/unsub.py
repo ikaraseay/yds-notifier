@@ -74,7 +74,7 @@ def build_calendar_url(
     """生成绑定邮箱的日历订阅地址 `https://.../calendar.ics?email=..&token=..`。
 
     Worker 会校验签名并读出该用户的角色 / 赛事偏好，只把他关心的事件写进 ICS。
-    任一参数缺失都返回空串 —— 调用方据此回退到公开日历，绝不发无签名链接。
+    任一参数缺失都返回空串 —— 调用方据此不放日历链接，绝不发无签名链接。
     """
     if not base or not secret or not email:
         return ""

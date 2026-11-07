@@ -1,13 +1,11 @@
 /**
- * 站点图标。
+ * 站点图标：内联 SVG，由 /favicon.svg 与 /favicon.ico 直出。
  *
- * 以前没有声明 <link rel="icon">，浏览器会按默认规则去要 /favicon.ico，
- * 拿到 404 后在控制台留一条「Failed to load resource」—— 这是首页第二条报错的来源。
- * 现在直接内联一枚 SVG：不需要额外的静态资源托管，也没有缓存戳的问题。
- *
- * 注意 CSP：图标属于 img-src，而页面默认是 default-src 'none'，
- * 所以 security.ts 的 csp() 里加了 img-src 'self'，否则图标会被拦掉换一条新报错。
+ * 页面统一声明 <link rel="icon">，避免浏览器回退到 /favicon.ico 拿到 404。
+ * CSP 的 img-src 'self' 必须保留，否则图标会被拦下。
  */
+
+import { cacheControl } from "../security";
 
 const FAVICON = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="研电赛通知订阅">
 <rect x="5" y="5" width="54" height="54" rx="11" fill="#FFD93D" stroke="#2E2A33" stroke-width="6"/>
@@ -21,7 +19,7 @@ export function faviconResponse(): Response {
     headers: {
       "Content-Type": "image/svg+xml;charset=utf-8",
       // 图标允许长缓存：内容不变，换了内容换个路径即可
-      "Cache-Control": "public, max-age=86400",
+      "Cache-Control": cacheControl(86400),
       "X-Content-Type-Options": "nosniff",
     },
   });

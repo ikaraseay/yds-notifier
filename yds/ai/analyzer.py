@@ -96,7 +96,7 @@ def analyze_notices(
         try:
             content = client.complete(prompt.system, user_payload(prompt, payload, today))
             parsed = validate_response(parse_json_object(content), payload, version)
-            # 模型漏答的条目也写一份空缓存，否则每 10 分钟都会为它重新调用一次
+            # 模型漏答的条目也写一份空缓存，否则每轮都会为它重新调用一次
             for item in payload:
                 uid = str(item.get("uid") or "")
                 if uid and uid not in parsed:

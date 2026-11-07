@@ -206,8 +206,11 @@ class ScheduleStore:
             return True
         try:
             last = datetime.fromisoformat(self.updated_at)
-        except ValueError:
+        except (ValueError, TypeError):
             return True
+        # 外部写入的 updatedAt 可能不带时区；按 UTC 解释，避免 naive/aware 相减崩溃
+        if last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
         return (datetime.now(timezone.utc) - last) > timedelta(days=days)
 
     def replace(self, contests: Sequence[ContestSchedule], year: int, source_url: str) -> bool:
@@ -301,7 +304,7 @@ class ScheduleStore:
 
 
 class ReminderLog:
-    """已发送提醒的去重记录，避免每 10 分钟重复提醒同一天。"""
+    """已发送提醒的去重记录，避免每天重复提醒同一天。"""
 
     def __init__(self, path: str):
         self.path = path

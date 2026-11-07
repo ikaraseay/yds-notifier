@@ -301,9 +301,9 @@ class CpipcPwSource(BaseSource):
 class CpipcZonesSource(BaseSource):
     """按赛事 id 抓取各专区通知。
 
-    19 个专区每 10 分钟全扫一遍对源站压力太大，因此：
-    - 用户明确关注某几项赛事时，只扫这几项（main.py 传入 only_contests）；
-    - 否则按 `per_run` 轮询，offset 由 data/zones.json 持久化，几轮覆盖全部。
+    19 个专区一次全扫是 19 次列表请求；主流程每天两轮、直接一轮全扫
+    （或只扫订阅者关注的赛事），不使用游标分片。
+    `per_run` / `offset` 轮询能力保留给需要更低频抓取的自建实例。
     """
 
     key = "cpipc_zones"
@@ -506,15 +506,22 @@ def build_sources(
     config: dict,
     only_contests: Optional[set] = None,
     zone_offset: int = 0,
+    first_pass: bool = True,
 ) -> List[BaseSource]:
     """按 config.yaml 里 sources 段的顺序构造数据源实例。
 
-    only_contests：订阅者实际关注的赛事集合（None 表示不限）；
-    zone_offset：赛事专区轮询起点，由 data/zones.json 持久化。
+    only_contests：订阅者实际关注的赛事集合（None 表示不限，走 per_run 轮询）；
+    zone_offset：赛事专区切片起点，仅自建低频实例按需传入（主流程不传）；
+    first_pass：本轮是否为当天第一轮。标记 `runs: daily` 的源只在第一轮抓取，
+    用于更新极慢的栏目（年度通知、大赛文件、学会公告）——它们一天最多一条，
+    抓两遍纯属重复请求。
     """
     sources: List[BaseSource] = []
     for item in config.get("sources", []):
         if not item.get("enabled", True):
+            continue
+        if not first_pass and str(item.get("runs", "twice")).lower() == "daily":
+            log.info("[%s] 本轮跳过（runs: daily，每天只在第一轮抓取）", item.get("key"))
             continue
         cls = REGISTRY.get(item.get("key", ""))
         if cls is None:

@@ -25,6 +25,20 @@ prompts:
           采用「模型提议、代码决定」：日期只给原文片段，禁止模型换算，
           规避跨年补错年份与「把发布日期当事件日」两类问题。
 
+  contest_status:
+    active: v1
+    system: contest_status/v1.system.md
+    user: contest_status/v1.user.md
+    changelog:
+      - version: v1
+        date: 2026-11-07
+        note: >-
+          批量判定各赛事本年度赛程是否结束，用于把已结束赛事的抓取降为每 14 天一次。
+          判定口径：只有「还有未来时间节点」才算进行中；结果公示 / 获奖名单 /
+          证书 / 报销等收尾公告是已结束的证据。模型提议、代码决定：官方赛程
+          或通知事件里仍有未来日期、缺少官方赛程节点、或赛程已过 3 周且只有
+          收尾公告时，由代码纠正模型判定。
+
   digest:
     active: v1
     system: digest/v1.system.md
