@@ -34,11 +34,17 @@ log = logging.getLogger("yds")
 
 # 抓取标识：如实声明自己是谁，不伪装浏览器。
 # 自定义用 CRAWLER_UA 覆盖（例如自建实例带上自己的联系方式）。
-DEFAULT_UA = (
-    "yds-notifier/1.0 (+https://github.com/ikaraseay/yds-notifier; "
-    "非官方通知聚合，每小时一次)"
-)
-UA = (os.environ.get("CRAWLER_UA") or DEFAULT_UA).strip() or DEFAULT_UA
+# 注意必须是纯 ASCII：HTTP 头按 latin-1 编码，中文会直接让整轮抓取抛错。
+DEFAULT_UA = "yds-notifier/1.0 (+https://github.com/ikaraseay/yds-notifier)"
+
+
+def _ascii_ua(value: str) -> str:
+    """把 UA 收敛成可打印 ASCII；空值或非法值回退到默认标识。"""
+    cleaned = "".join(ch for ch in value or "" if 32 <= ord(ch) < 127).strip()
+    return cleaned or DEFAULT_UA
+
+
+UA = _ascii_ua(os.environ.get("CRAWLER_UA") or DEFAULT_UA)
 
 # robots.txt 处理策略：enforce（默认，命中 Disallow 即跳过）/ warn（只记日志）/ off
 _MODE_ENV = (os.environ.get("RESPECT_ROBOTS") or "enforce").strip().lower()
@@ -59,6 +65,8 @@ _memo_lock = threading.Lock()
 _robots_cache: Dict[str, Optional[RobotsRules]] = {}
 _robots_blocked: Dict[str, int] = {}
 _robots_lock = threading.Lock()
+_robots_guard = threading.Lock()
+_robots_locks: Dict[str, threading.Lock] = {}
 
 STATS = {"requests": 0, "shared": 0, "errors": 0, "retries": 0, "robots": 0}
 
@@ -71,6 +79,8 @@ def reset_stats() -> None:
     with _robots_lock:
         _robots_cache.clear()
         _robots_blocked.clear()
+    with _robots_guard:
+        _robots_locks.clear()
     for k in STATS:
         STATS[k] = 0
 
@@ -91,30 +101,43 @@ def robots_summary() -> str:
 
 
 def _robots_for(host: str) -> Optional[RobotsRules]:
-    """取主机的 robots.txt 规则；取不到返回 None（按放行处理）。"""
+    """取主机的 robots.txt 规则；取不到返回 None（按放行处理）。
+
+    并发抓取时同一主机的 robots.txt 只真正请求一次：先查缓存，
+    再按主机加锁，避免 13 个线程同时打 /robots.txt。
+    """
     with _robots_lock:
         if host in _robots_cache:
             return _robots_cache[host]
-    rules: Optional[RobotsRules] = None
-    url = f"https://{host}/robots.txt"
-    try:
-        STATS["robots"] += 1
-        resp = requests.get(url, timeout=10, headers={"User-Agent": UA})
-        if resp.status_code == 200:
-            rules = parse_robots(resp.text, ua_token=UA)
-            log.info(
-                "robots.txt：%s 共 %s 条规则（%s）",
-                host, len(rules.rules), RESPECT_ROBOTS,
+    with _robots_guard:
+        host_lock = _robots_locks.setdefault(host, threading.Lock())
+    with host_lock:
+        with _robots_lock:
+            if host in _robots_cache:
+                return _robots_cache[host]
+        rules: Optional[RobotsRules] = None
+        url = f"https://{host}/robots.txt"
+        try:
+            STATS["robots"] += 1
+            resp = requests.get(
+                url, timeout=10,
+                headers={"User-Agent": UA, "Accept": "text/plain,*/*;q=0.8"},
             )
-        elif resp.status_code >= 500:
-            log.warning("robots.txt 返回 %s，本轮按放行处理：%s", resp.status_code, host)
-        else:
-            log.info("robots.txt 不存在（%s），按放行处理：%s", resp.status_code, host)
-    except Exception as exc:  # noqa: BLE001 - 取不到 robots 不应阻断抓取
-        log.warning("robots.txt 获取失败，本轮按放行处理 %s：%s", host, str(exc)[:120])
-    with _robots_lock:
-        _robots_cache[host] = rules
-    return rules
+            if resp.status_code == 200:
+                rules = parse_robots(resp.text, ua_token=UA)
+                log.info(
+                    "robots.txt：%s 共 %s 条规则（%s）",
+                    host, len(rules.rules), RESPECT_ROBOTS,
+                )
+            elif resp.status_code >= 500:
+                log.warning("robots.txt 返回 %s，本轮按放行处理：%s", resp.status_code, host)
+            else:
+                log.info("robots.txt 不存在（%s），按放行处理：%s", resp.status_code, host)
+        except Exception as exc:  # noqa: BLE001 - 取不到 robots 不应阻断抓取
+            log.warning("robots.txt 获取失败，本轮按放行处理 %s：%s", host, str(exc)[:120])
+        with _robots_lock:
+            _robots_cache[host] = rules
+        return rules
 
 
 def robots_allows(url: str) -> bool:

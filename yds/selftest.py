@@ -307,6 +307,11 @@ def main() -> int:
     )
     check("专属 UA 组优先于 *", specific.allows("/public/x") and not specific.allows("/private/x"))
     check("抓取标识不伪装浏览器", "Mozilla" not in fetch_mod.UA and "yds-notifier" in fetch_mod.UA)
+    # HTTP 头按 latin-1 编码：UA 里有中文会让每次请求直接抛错（曾把整轮抓取打挂）
+    check("抓取标识是纯 ASCII", all(ord(ch) < 128 for ch in fetch_mod.UA), fetch_mod.UA)
+    check("中文 UA 会被收敛成 ASCII", all(
+        ord(ch) < 128 for ch in fetch_mod._ascii_ua("测试 中文/1.0"))
+    )
     # 策略开关：enforce 一个字节都不请求，warn 只提示，off 完全不校验
     fetch_mod.reset_stats()
     fetch_mod._robots_cache["blocked.test"] = parse_robots("User-agent: *\nDisallow: /\n")
