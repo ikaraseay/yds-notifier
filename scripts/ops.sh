@@ -26,6 +26,24 @@ set -euo pipefail
 PY="$PROJECT_ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY="$(command -v python3 || true)"
 
+# 仓库里的 wrangler.toml 只保留占位符；本地 wrangler 需要真实 KV id 时临时注入，
+# 无论命令成败都在退出时还原，避免把真实值误提交回仓库。
+WORKER_CONFIG_BACKUP=""
+restore_worker_config() {
+  if [ -n "$WORKER_CONFIG_BACKUP" ] && [ -f "$WORKER_CONFIG_BACKUP" ]; then
+    cp "$WORKER_CONFIG_BACKUP" "$WRANGLER_CONFIG"
+    rm -f "$WORKER_CONFIG_BACKUP"
+    WORKER_CONFIG_BACKUP=""
+  fi
+}
+inject_worker_config() {
+  WORKER_CONFIG_BACKUP="$(mktemp)"
+  cp "$WRANGLER_CONFIG" "$WORKER_CONFIG_BACKUP"
+  (cd "$WORKER_DIR" && npm run --silent sync-config >/dev/null) \
+    || { restore_worker_config; die "sync-config 失败：检查 .env 的 KV_SUBS_ID"; }
+}
+trap restore_worker_config EXIT
+
 usage() {
   sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit 0
@@ -183,7 +201,9 @@ cmd_check() {
   (cd "$WORKER_DIR" && npm run typecheck >/dev/null && npm test 2>&1 | tail -3 | sed 's/^/  /' \
     && npm run build 2>&1 | tail -3 | sed 's/^/  /')
   step "Wrangler 部署干跑"
+  inject_worker_config
   wrangler deploy --dry-run --outdir /tmp/yds-dryrun 2>&1 | tail -6 | sed 's/^/  /'
+  restore_worker_config
   ok "本地校验全部通过"
 }
 
@@ -195,7 +215,9 @@ cmd_deploy() {
   note "站点：$base"
   ask_yes_no "确认构建并部署到 Cloudflare？" || { note "已取消"; exit 0; }
   step "构建并部署"
+  inject_worker_config
   (cd "$WORKER_DIR" && npm run deploy) 2>&1 | tail -12 | sed 's/^/  /'
+  restore_worker_config
   step "验证"
   local code
   code="$(curl_code "$base/health")"
@@ -352,11 +374,12 @@ cmd_doctor() {
 
   local kv_in_toml
   kv_in_toml="$(sed -n 's/^id *= *"\([^"]*\)".*/\1/p' "$WRANGLER_CONFIG" | head -1)"
-  if [ -n "$kv_in_toml" ] && [ "$kv_in_toml" = "${KV_SUBS_ID:-}" ]; then
-    mark_ok "KV id 与 wrangler.toml 一致"
-  else
-    mark_warn "KV id 两处不一致：.env=${KV_SUBS_ID:-空} / wrangler.toml=${kv_in_toml:-空}（跑 ops.sh config set KV_SUBS_ID <id>）"
-  fi
+  case "$kv_in_toml" in
+    ""|REPLACE_WITH_YOUR_KV_ID)
+      mark_ok "wrangler.toml 保持占位符（真实 KV id 只在 .env / Build variables）" ;;
+    *)
+      mark_warn "wrangler.toml 含真实 KV id（本地注入，勿提交；ops.sh deploy 结束会自动还原）" ;;
+  esac
 
   step "Cloudflare"
   if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
