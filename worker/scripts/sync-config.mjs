@@ -104,7 +104,7 @@ const block = `${BEGIN}\nid = ${JSON.stringify(kvId)}\n${routes}${END}`;
 const next = src.replace(blockRe, block);
 if (next !== src) fs.writeFileSync(TOML_PATH, next);
 
-console.log(`[sync-config] KV_SUBS_ID = ${kvId}`);
+console.log(`[sync-config] KV_SUBS_ID 已注入（长度 ${kvId.length}）`);
 console.log(
   customDomain
     ? `[sync-config] 自定义域名 = ${customDomain}（workers.dev 仍保留）`
