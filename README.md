@@ -56,11 +56,11 @@ Python 端与 Worker 端通过少量契约耦合，共享 `UNSUB_SECRET` 与 `SU
 
 | 数据源 | 内容 | 抓取策略 |
 |---|---|---|
-| [研创网 · 研电赛专区](https://cpipc.acge.org.cn/cw/contestNews/list/6/1) | 报名 / 评审 / 决赛 | 每轮 3 页 |
-| 研创网 · 各赛事专区 | 19 项可扫赛事（共 20 项，1 项无独立专区） | 按订阅者关注的赛事 ∩ 本轮该扫的赛事 |
-| [研创网 · 大赛通知](https://cpipc.acge.org.cn/pw/notice/list/1) | 赛程一览、年度启动、承办征集 | 每轮 2 页 |
-| [研创网 · 大赛新闻](https://cpipc.acge.org.cn/pw/news/list/1) · [大赛文件](https://cpipc.acge.org.cn/pw/document/list/1) | 赛事动态、章程与材料 | 每轮各 1 页 |
-| [中国电子学会 · 通知公告](https://www.cie.org.cn/list_43/) | 主办方公告 | 每轮 2 页，按关键词过滤 |
+| [研创网 · 研电赛专区](https://cpipc.acge.org.cn/cw/contestNews/list/6/1) | 报名 / 评审 / 决赛 | 每轮 1 页 |
+| 研创网 · 各赛事专区 | 19 项可扫赛事（共 20 项，1 项无独立专区） | 每轮 1 页；按订阅者关注过滤，已结束赛事每 14 天 1 次 |
+| [研创网 · 大赛通知](https://cpipc.acge.org.cn/pw/notice/list/1) | 赛程一览、年度启动、承办征集 | 每日 1 页（上午轮） |
+| [研创网 · 大赛新闻](https://cpipc.acge.org.cn/pw/news/list/1) · [大赛文件](https://cpipc.acge.org.cn/pw/document/list/1) | 赛事动态、章程与材料 | 每轮 1 页；大赛文件每日 1 页（上午轮） |
+| [中国电子学会 · 通知公告](https://www.cie.org.cn/list_43/) | 主办方公告 | 每日 2 页（上午轮），按关键词过滤 |
 
 通知的人员视角、阶段矩阵与提醒规则见 [`docs/通知计划.md`](docs/通知计划.md)。
 
@@ -186,7 +186,7 @@ RSS 与归档页无需登录。个人日历只认签名链接，按该用户的�
 | 发送窗口 | 日报 / 周报只在上午那轮发出（`digest_hour` 起 8 小时内），容纳 GitHub 定时任务延迟 |
 | 新条目窗口 | 发布超过 14 天的条目只归档、不推送（仍标记已读，历史由 `seen.json` 重建） |
 | 公开内容 | 归档页、RSS 无需登录；个人日历无签名返回 401 |
-| 单次成本 | 稳定状态全天约 29 次列表请求（上午 17 / 晚上 12，含 robots 探测）；无新公告时不抓详情、不调 AI |
+| 单次成本 | 稳定状态全天约 29 次列表请求（上午 17 / 晚上 11，含 robots 探测）；已结束赛事每 14 天复扫一次，那天上午多 10 次；无新公告时不抓详情、不调 AI |
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
