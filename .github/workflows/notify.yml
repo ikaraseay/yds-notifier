@@ -62,7 +62,7 @@ jobs:
       # 抓取标识与 robots.txt 策略（见 README「数据来源与免责声明」）
       CRAWLER_UA: ${{ secrets.CRAWLER_UA }}
       RESPECT_ROBOTS: ${{ secrets.RESPECT_ROBOTS || 'enforce' }}
-      # AI 分析（OpenAI 兼容接口，默认 DeepSeek）；提示词在 prompts/ 目录
+      # AI 分析（OpenAI 兼容接口，默认 DeepSeek）；提示词在 backend/prompts/ 目录
       AI_ENABLED: ${{ secrets.AI_ENABLED || 'true' }}
       AI_API_KEY: ${{ secrets.AI_API_KEY }}
       AI_BASE_URL: ${{ secrets.AI_BASE_URL || 'https://api.deepseek.com' }}
@@ -96,22 +96,22 @@ jobs:
 
       # 不联网的契约自测：退订签名格式、收件人校验、配置读取、变更检测
       - name: 配置与契约自测
-        run: python -m yds.selftest
+        run: python -m backend.selftest
 
       # 入口自检：防止 __main__.py 只 import 不调用 main() 导致「假成功」
       - name: 入口自检
         run: |
-          python -m yds --help | grep -q "usage: yds" || {
-            echo "::error::python -m yds 未正确调用 main()"; exit 1;
+          python -m backend --help | grep -q "usage: yds" || {
+            echo "::error::python -m backend 未正确调用 main()"; exit 1;
           }
 
       - name: 抓取通知并发送邮件
         run: |
           MODE="${{ github.event.inputs.mode || 'normal' }}"
           if [ "$MODE" = "check" ]; then
-            python -m yds --check
+            python -m backend --check
           else
-            python -m yds
+            python -m backend
           fi
 
       # 成功心跳：配合外部 dead-man switch（Healthchecks / UptimeRobot / Better Stack），

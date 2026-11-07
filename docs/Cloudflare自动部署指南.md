@@ -32,7 +32,7 @@ Python 端仍跑在 GitHub Actions，两者通过共享密钥 + `/api/list` 协�
 
 > **`.env` 不会被 Cloudflare 读取**。生产运行时配置填 Dashboard → Variables and Secrets；
 > `.env` 里的 `CUSTOM_DOMAIN` / `KV_SUBS_ID` 通过 `npm run sync-config` 在**构建期**写进 `wrangler.toml`。
-> Wrangler 本地只认 `worker/` 同目录的 `.dev.vars`（模板 `worker/.dev.vars.example`）。
+> Wrangler 本地只认 `cloudflare/` 同目录的 `.dev.vars`（模板 `cloudflare/.dev.vars.example`）。
 
 ---
 
@@ -55,7 +55,7 @@ Custom Domain 要求该域名有一个**已接入 Cloudflare 的 zone**（把域
 ### 2.3 `sync-config` 会生成什么
 
 ```bash
-cd worker
+cd cloudflare
 CUSTOM_DOMAIN=notice.example.com KV_SUBS_ID=<你的KV_ID> npm run sync-config
 ```
 
@@ -200,9 +200,9 @@ Worker 会按 Svix 规范验签（时间戳 ±5 分钟防重放），验证通�
 
 ## 五、部署步骤
 
-1. 生成密钥、创建 KV（`cd worker && npx wrangler kv namespace create SUBS`）
+1. 生成密钥、创建 KV（`cd cloudflare && npx wrangler kv namespace create SUBS`）
 2. 在根目录 `.env` 填 `CUSTOM_DOMAIN`、`WORKERS_DEV_URL`、`KV_SUBS_ID` 等
-3. `cd worker && npm run sync-config` 在本地生成真实域名与 KV id（**不要提交**，仓库只保留占位符；CI 由 Build variables 注入）
+3. `cd cloudflare && npm run sync-config` 在本地生成真实域名与 KV id（**不要提交**，仓库只保留占位符；CI 由 Build variables 注入）
 4. Cloudflare Dashboard → Worker → **Settings → Builds → Connect to Git**，按 3.4 填 Build 配置与 Build variables
 5. 按 3.1 / 3.2 填 Variables and Secrets；按第四节填 GitHub Secrets
 6. 触发首次构建。若 `CUSTOM_DOMAIN` 对应的 zone 已在 Cloudflare，部署会自动创建 DNS 与证书
@@ -224,7 +224,7 @@ curl -H "Authorization: Bearer <SUBSCRIBE_API_TOKEN>" \
 
 ```bash
 # Worker
-cd worker
+cd cloudflare
 cp .dev.vars.example .dev.vars     # PUBLIC_BASE_URL=http://localhost:8787
 npm ci
 npm run sync-config                # 从根目录 .env 同步域名与 KV id
@@ -234,11 +234,11 @@ npm run dev                        # http://localhost:8787
 # Python（仓库根目录）
 cp .env.example .env
 python -m venv .venv && .venv/bin/pip install -r requirements.txt
-.venv/bin/python -m yds.selftest   # 含域名派生、退订签名、收件人校验
-.venv/bin/python -m yds --dry-run
+.venv/bin/python -m backend.selftest   # 含域名派生、退订签名、收件人校验
+.venv/bin/python -m backend --dry-run
 ```
 
-`npm run check` 与 `python -m yds.selftest` 在 CI 中自动执行。
+`npm run check` 与 `python -m backend.selftest` 在 CI 中自动执行。
 
 ---
 

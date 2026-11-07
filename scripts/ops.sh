@@ -8,7 +8,7 @@
 #   bash scripts/ops.sh cf-secrets    只同步 Cloudflare（wrangler）
 #   bash scripts/ops.sh gh-secrets    只同步 GitHub（gh）
 #   bash scripts/ops.sh config        .env 的查看 / 修改 / 校验
-#   bash scripts/ops.sh dev-vars      从 .env 生成 worker/.dev.vars
+#   bash scripts/ops.sh dev-vars      从 .env 生成 cloudflare/.dev.vars
 #   bash scripts/ops.sh check         本地校验：自测 / 类型 / 测试 / 干跑
 #   bash scripts/ops.sh deploy        构建并部署 Worker
 #   bash scripts/ops.sh notify       触发 Actions（normal | check）
@@ -144,7 +144,7 @@ cmd_config() {
   esac
 }
 
-# 本地开发凭据：Wrangler 只认 worker/ 同目录的 .dev.vars
+# 本地开发凭据：Wrangler 只认 cloudflare/ 同目录的 .dev.vars
 cmd_dev_vars() {
   load_config
   step "生成 $DEV_VARS"
@@ -195,8 +195,8 @@ cmd_check() {
   step "Python 自测"
   [ -x "$PROJECT_ROOT/.venv/bin/python" ] \
     || die "缺少虚拟环境：python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
-  (cd "$PROJECT_ROOT" && .venv/bin/python -m compileall -q yds \
-    && .venv/bin/python -m yds.selftest 2>&1 | tail -3 | sed 's/^/  /')
+  (cd "$PROJECT_ROOT" && .venv/bin/python -m compileall -q backend \
+    && .venv/bin/python -m backend.selftest 2>&1 | tail -3 | sed 's/^/  /')
   step "Worker 类型 / 测试 / 构建"
   (cd "$WORKER_DIR" && npm run typecheck >/dev/null && npm test 2>&1 | tail -3 | sed 's/^/  /' \
     && npm run build 2>&1 | tail -3 | sed 's/^/  /')
@@ -356,14 +356,14 @@ cmd_doctor() {
   if [ -x "$WORKER_DIR/node_modules/.bin/wrangler" ]; then
     mark_ok "wrangler 已安装"
   else
-    mark_fail "wrangler 未安装：cd worker && npm ci"
+    mark_fail "wrangler 未安装：cd cloudflare && npm ci"
   fi
 
   step "依赖"
   [ -x "$PROJECT_ROOT/.venv/bin/python" ] && mark_ok "Python 虚拟环境就绪" \
     || mark_warn "缺 .venv：python3 -m venv .venv && .venv/bin/pip install -r requirements.txt"
   [ -d "$WORKER_DIR/node_modules" ] && mark_ok "Worker 依赖就绪" \
-    || mark_warn "Worker 依赖未装：cd worker && npm ci"
+    || mark_warn "Worker 依赖未装：cd cloudflare && npm ci"
 
   step "配置"
   [ -f "$CONFIG_FILE" ] && mark_ok "配置存在：$CONFIG_FILE" \

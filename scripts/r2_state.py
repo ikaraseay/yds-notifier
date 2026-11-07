@@ -22,8 +22,8 @@ import sys
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
-from yds.config import settings  # noqa: E402
-from yds.store import STATE_FILES, StateUnavailable, build_store  # noqa: E402
+from backend.config import settings  # noqa: E402
+from backend.store import STATE_FILES, StateUnavailable, build_store  # noqa: E402
 
 DATA_DIR = os.path.join(ROOT, "data")
 

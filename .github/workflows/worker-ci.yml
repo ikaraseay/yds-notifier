@@ -5,11 +5,15 @@ name: Worker 校验
 on:
   push:
     paths:
-      - "worker/**"
+      - "cloudflare/**"
+      - "frontend/**"
+      - "config/**"
       - ".github/workflows/worker-ci.yml"
   pull_request:
     paths:
-      - "worker/**"
+      - "cloudflare/**"
+      - "frontend/**"
+      - "config/**"
   workflow_dispatch:
     inputs:
       deploy:
@@ -33,27 +37,27 @@ jobs:
         with:
           node-version: "20"
           cache: npm
-          cache-dependency-path: worker/package-lock.json
+          cache-dependency-path: cloudflare/package-lock.json
 
       - name: 安装依赖
-        working-directory: worker
+        working-directory: cloudflare
         run: npm ci
 
       - name: 类型检查
-        working-directory: worker
+        working-directory: cloudflare
         run: npm run typecheck
 
       - name: 端到端测试
-        working-directory: worker
+        working-directory: cloudflare
         run: npm test
 
       - name: 构建 dist/index.js
-        working-directory: worker
+        working-directory: cloudflare
         run: npm run build
 
       - name: 兜底部署（仅手动勾选时）
         if: github.event_name == 'workflow_dispatch' && inputs.deploy
-        working-directory: worker
+        working-directory: cloudflare
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}

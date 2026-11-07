@@ -81,7 +81,7 @@ Python 端与 Worker 端通过少量契约耦合，共享 `UNSUB_SECRET` 与 `SU
 | 数据存储 | Cloudflare R2（Python 状态，默认）· Workers KV（账号 / 订阅 / 会话 / 归档）· Durable Objects（限流） |
 | AI | OpenAI 兼容接口（默认 DeepSeek），用于通知分析与赛事状态判定 |
 | 部署 | Cloudflare Workers Builds · Custom Domains |
-| 质量门禁 | `yds.selftest` · Worker e2e · `tsc --noEmit` · Wrangler dry-run |
+| 质量门禁 | `backend.selftest` · Worker e2e · `tsc --noEmit` · Wrangler dry-run |
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -119,12 +119,12 @@ flowchart LR
     U -.->|登录 / 退订链接| W
 ```
 
-部署链路：push 到 `main` → Workers Builds 在 `worker/` 目录执行
+部署链路：push 到 `main` → Workers Builds 在 `cloudflare/` 目录执行
 `npm ci && npm run sync-config && npm run build` → esbuild 产出 `dist/index.js` → `npx wrangler deploy`。
 `sync-config` 从 `.env` / Build variables 读取自定义域名与 KV id，写入 `wrangler.toml` 的 `AUTO-CONFIG` 区块；仓库内只保留占位符，真实值不入库。
 
 > Workers Builds 的 Build variables 只在构建期可见；运行时配置填在 Variables and Secrets，
-> Wrangler 本地调试读取 `worker/.dev.vars`。
+> Wrangler 本地调试读取 `cloudflare/.dev.vars`。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
 
@@ -174,7 +174,7 @@ AI 判为 `critical` 的通知走紧急快报立即送达，低价值动态在�
 
 **归档与日历**：`/archive` 提供列表与月历视图，可按赛事 / 角色筛选，节点标题链回原文；
 RSS 与归档页无需登录。个人日历只认签名链接，按该用户的角色与关注赛事过滤事件；
-官方赛程表写入日历，并对 `config.yaml` 中 `schedule.include` 指定的赛事在 T-30 / T-7 / T-3 / T-1 发提醒。
+官方赛程表写入日历，并对 `config/config.yaml` 中 `schedule.include` 指定的赛事在 T-30 / T-7 / T-3 / T-1 发提醒。
 
 **名单卫生**：Resend webhook 验签后自动移除硬退信与投诉地址并写入抑制标记；
 `/api/stats` 汇总退订原因。发信失败不写已读状态，下一轮整批重试；
@@ -213,19 +213,20 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.example .env            # 填入真实值，.env 已被忽略
 
-cd worker
+cd cloudflare
 npm ci
 cp .dev.vars.example .dev.vars
 npm run dev
 ```
 
-本地常用命令：
+本地常用命令（回到仓库根目录）：
 
 ```bash
-.venv/bin/python -m yds.selftest      # 离线自测，不联网
-.venv/bin/python -m yds --check       # 只抓取打印，不写状态、不发信
-.venv/bin/python -m yds --dry-run     # 完整流程，不发信、不写状态
-.venv/bin/python -m yds --preview preview.html
+cd ..
+.venv/bin/python -m backend.selftest      # 离线自测，不联网
+.venv/bin/python -m backend --check       # 只抓取打印，不写状态、不发信
+.venv/bin/python -m backend --dry-run     # 完整流程，不发信、不写状态
+.venv/bin/python -m backend --preview preview.html
 ```
 
 只读命令会使用 R2 的真实状态做判定，并在退出时还原本地 `data/*.json`。
@@ -233,9 +234,9 @@ npm run dev
 ### 测试与构建
 
 ```bash
-.venv/bin/python -m compileall -q yds && .venv/bin/python -m yds.selftest
+.venv/bin/python -m compileall -q backend && .venv/bin/python -m backend.selftest
 
-cd worker
+cd cloudflare
 npm run typecheck     # tsc --noEmit
 npm test              # 端到端测试
 npm run build         # esbuild → dist/index.js
@@ -254,7 +255,7 @@ npx wrangler deploy --dry-run --outdir /tmp/yds-dryrun
 ### 1. Cloudflare Worker
 
 ```bash
-cd worker
+cd cloudflare
 npx wrangler kv namespace create SUBS   # 把返回的 id 填进 .env 的 KV_SUBS_ID
 npm run sync-config                     # 写入自定义域名 routes 与 KV id
 bash ../scripts/ops.sh deploy           # 首次部署；凭据取自 .env 的账户级 Token
@@ -267,7 +268,7 @@ Dashboard → Worker → **Settings → Builds → Connect to Git**：
 
 | 字段 | 值 |
 |---|---|
-| Root directory | `worker` |
+| Root directory | `cloudflare` |
 | Build command | `npm ci && npm run sync-config && npm run build` |
 | Deploy command | `npx wrangler deploy` |
 | Build variables | `KV_SUBS_ID`（建议设为 secret）；使用自定义域名时加 `CUSTOM_DOMAIN` |
@@ -323,7 +324,7 @@ git push origin main
 ## 配置说明
 
 `.env` 是**唯一事实源**，优先级为：进程环境变量（CI / Cloudflare 注入）> `.env` > 内置默认值。
-`.env` 与 `worker/.dev.vars` 均被忽略；`config.yaml` 描述业务规则（数据源、白名单、去重、主题前缀）。
+`.env` 与 `cloudflare/.dev.vars` 均被忽略；`config/config.yaml` 描述业务规则（数据源、白名单、去重、主题前缀）。
 
 | 派生项 | 规则 |
 |---|---|
@@ -337,12 +338,12 @@ git push origin main
 - 发件域名独立于站点域名；`MAIL_FROM_ADDRESS` 只需属于 Resend 已验证域名。
 - 显示名固定带 `[非官方]`：`MAIL_FROM_NAME` 只写基础名，Worker 的 `unofficialSenderName()`
   与 Python 的 `unofficial_sender_name()` 补上后缀，漏配变量也不会丢。
-- 页脚统一：「非官方声明 + 项目地址 + 错误报告」集中在 `worker/src/static.ts`。
-- 提示词在 `prompts/`，版本由 `prompts/manifest.yaml` 的 `active` 决定：
+- 页脚统一：「非官方声明 + 项目地址 + 错误报告」集中在 `cloudflare/src/static.ts`。
+- 提示词在 `backend/prompts/`，版本由 `backend/prompts/manifest.yaml` 的 `active` 决定：
   `notices: v2`（分类 / 摘要 / 紧急度 / 赛事名 / 阶段 / 面向人群 / 行动建议 / 事件日期）、
   `contest_status: v1`（赛事是否结束）、`digest: v1`（预留，不参与运行时）。
 
-### config.yaml 关键值
+### 业务规则（config/config.yaml）关键值
 
 | 键 | 值 | 作用 |
 |---|---|---|
@@ -423,23 +424,28 @@ R2 读不到（网络 / 权限 / 桶名错）或状态对象全丢时直接中�
 ```
 yds-notifier/
 ├── .env.example · .env          # 配置模板 / 本地配置（后者已忽略）
-├── config.yaml                  # 业务规则：数据源 / 去重 / 主题前缀
-├── shared/contests.json         # 跨端赛事契约：20 项赛事 + 专区 id
-├── prompts/                     # manifest.yaml + notices / contest_status / digest / schemas
+├── config/
+│   ├── config.yaml              # 业务规则：数据源 / 去重 / 主题前缀
+│   └── contests.json            # 跨端赛事契约：20 项赛事 + 专区 id
+├── backend/                     # Python：抓取 / 分析 / 发信 / 状态
+│   ├── main.py · sources.py · contests.py · state.py · store/
+│   ├── ai/                      # 分析客户端、schema、缓存、编排
+│   └── prompts/                 # manifest.yaml + notices / contest_status / digest / schemas
+├── frontend/                    # Worker 页面渲染层（结构与样式分离）
+│   ├── layout.ts · pages.ts · styles.ts · footer.ts · icons.ts
+│   └── archive/                 # 归档页：列表 / 日历 / 外壳
+├── cloudflare/                  # Worker 运行时与部署层
+│   ├── src/index.ts             # 路由与统一错误处理
+│   ├── src/env.ts · security.ts · auth.ts · rate.ts · mailer.ts · static.ts
+│   ├── src/handlers/            # login / dashboard / unsubscribe / api / feed / webhook
+│   ├── src/feed/                # 通知数据契约 + 赛程展开
+│   ├── wrangler.toml            # Worker 绑定声明（占位符，sync-config 注入真实值）
+│   ├── scripts/sync-config.mjs  # .env → wrangler.toml
+│   └── tests/worker.e2e.mjs     # 端到端测试
 ├── scripts/                     # ops.sh 总入口 + 密钥同步 + R2 状态工具
 ├── docs/                        # 部署 / 发信 / 退订 / 通知规则文档
 ├── data/                        # 状态快照：seen / ai / pending / schedule / reminders / zones
-├── .github/workflows/           # notify.yml（抓取发信）· worker-ci.yml（校验）
-├── yds/                         # Python：main / sources / contests / ai / state / store /
-│                                #        mailer / dispatch / publish / recipients / fetch
-└── worker/
-    ├── src/index.ts             # 路由与统一错误处理
-    ├── src/env.ts · security.ts · auth.ts · rate.ts · mailer.ts · static.ts
-    ├── src/handlers/            # login / dashboard / unsubscribe / api / feed / webhook
-    ├── src/feed/                # 通知数据契约 + 赛程展开
-    ├── src/ui/                  # 控制台页面、归档页（结构与样式分离）
-    ├── scripts/sync-config.mjs  # .env → wrangler.toml
-    └── tests/worker.e2e.mjs     # 端到端测试
+└── .github/workflows/           # notify.yml（抓取发信）· worker-ci.yml（校验）
 ```
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
@@ -476,7 +482,7 @@ yds-notifier/
 | `config show\|get\|set\|check` | 查看 / 修改 / 校验 `.env`（`show` 自动脱敏） |
 | `secrets` | 从 `.env` 同步密钥到 Cloudflare + GitHub（支持 `--dry-run`） |
 | `cf-secrets` / `gh-secrets` | 只同步其中一端（支持 `--only KEY` / `--list`） |
-| `dev-vars` | 从 `.env` 生成 `worker/.dev.vars` |
+| `dev-vars` | 从 `.env` 生成 `cloudflare/.dev.vars` |
 | `check` | Python 自测 + Worker 类型 / 测试 / 构建 + Wrangler 干跑 |
 | `deploy` | 构建并部署 Worker，随后探测 `/health` |
 | `notify normal\|check` / `logs` | 触发或查看 GitHub Actions |
@@ -485,12 +491,12 @@ yds-notifier/
 
 | 想做的事 | 改哪里 |
 |---|---|
-| 增删数据源 / 改抓取深度 | `config.yaml` |
-| 接入新站点 | `yds/sources.py` 继承 `BaseSource`，配置 `allowed_hosts` |
-| 更换发信服务商 | `yds/senders.py` 继承 `BaseSender` |
-| 调整邮件样式 | `yds/mailer.py` 的 `build_html` |
-| 修改 Worker 界面 / 后端 | `worker/src/ui/` / `worker/src/handlers/` |
-| 调整栏目 | 同步修改 `worker/src/auth.ts` 的 `CATEGORIES` 与 `yds/recipients.py` 的 `CATEGORY_TO_KEY` |
+| 增删数据源 / 改抓取深度 | `config/config.yaml` |
+| 接入新站点 | `backend/sources.py` 继承 `BaseSource`，配置 `allowed_hosts` |
+| 更换发信服务商 | `backend/senders.py` 继承 `BaseSender` |
+| 调整邮件样式 | `backend/mailer.py` 的 `build_html` |
+| 修改 Worker 界面 / 后端 | `frontend/` / `cloudflare/src/handlers/` |
+| 调整栏目 | 同步修改 `cloudflare/src/auth.ts` 的 `CATEGORIES` 与 `backend/recipients.py` 的 `CATEGORY_TO_KEY` |
 | 更换站点域名 | 改 `.env` 的 `CUSTOM_DOMAIN`，跑 `ops.sh secrets` 与 `ops.sh deploy` |
 | 更换发件地址 | 改 `MAIL_FROM_ADDRESS` 并跑 `ops.sh secrets`；Resend 侧需先验证该域名 |
 
@@ -520,11 +526,11 @@ yds-notifier/
 ## 贡献指南
 
 1. Fork 本仓库，创建特性分支：`git checkout -b feature/your-feature`
-2. 提交前跑通本地校验：`yds.selftest`、`npm run typecheck`、`npm test`、`npm run build`
+2. 提交前跑通本地校验：`backend.selftest`、`npm run typecheck`、`npm test`、`npm run build`
 3. 提交变更：`git commit -m "feat: ..."` 并发起 Pull Request
 
-请勿提交任何真实凭据：`.env`、`worker/.dev.vars`、`dist/`、`node_modules/` 均已忽略；
-如新增配置项，请同步更新 `.env.example` 与 `worker/.dev.vars.example`。
+请勿提交任何真实凭据：`.env`、`cloudflare/.dev.vars`、`dist/`、`node_modules/` 均已忽略；
+如新增配置项，请同步更新 `.env.example` 与 `cloudflare/.dev.vars.example`。
 问题与建议请通过 [Issues][issues-url] 提出。
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
@@ -557,7 +563,7 @@ Disallow: /
 - 本地留存：`data/` 下为去重指纹、AI 生成的元数据（阶段、面向人群、事件日期）与用于日期抽取的截断正文片段（单条上限 `AI_MAX_BODY_CHARS`，默认 3000 字符），不镜像完整页面。
 
 **4. robots.txt 策略与当前部署取值**
-抓取层（`yds/fetch.py` + `yds/robots.py`）解析目标站 robots.txt，提供三档策略：`enforce`（代码默认，命中 `Disallow` 的地址一个字节都不请求）、`warn`（只记日志、继续抓取）、`off`（不校验）。取不到 robots.txt 时按放行处理，避免站点抖动导致整轮停摆。
+抓取层（`backend/fetch.py` + `backend/robots.py`）解析目标站 robots.txt，提供三档策略：`enforce`（代码默认，命中 `Disallow` 的地址一个字节都不请求）、`warn`（只记日志、继续抓取）、`off`（不校验）。取不到 robots.txt 时按放行处理，避免站点抖动导致整轮停摆。
 **当前在线实例设为 `warn`**：维护者已知悉站方禁止，仍以个人订阅用途保持低频抓取，相应责任由维护者承担。自行部署者应独立选择策略，并对自己实例的抓取行为负责。
 
 **5. 停止与删除**

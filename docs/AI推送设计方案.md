@@ -27,7 +27,7 @@
 
 | 项目 | 做法 | 借鉴点 |
 |---|---|---|
-| [Thysrael/Horizon](https://github.com/Thysrael/Horizon) | 多源抓取 → AI 0~10 打分 / 去重 / 结构化摘要 / 背景补充 → 网页/邮件/webhook 多端输出；`config.yaml` 配模型，兼容 DeepSeek / OpenRouter | **AI 评分 + 结构化摘要 + 多端分发**；配置与代码分离 |
+| [Thysrael/Horizon](https://github.com/Thysrael/Horizon) | 多源抓取 → AI 0~10 打分 / 去重 / 结构化摘要 / 背景补充 → 网页/邮件/webhook 多端输出；`config/config.yaml` 配模型，兼容 DeepSeek / OpenRouter | **AI 评分 + 结构化摘要 + 多端分发**；配置与代码分离 |
 | [finaldie/auto-news](https://github.com/finaldie/auto-news) | 多源聚合 + LLM 降噪汇总 | 噪声过滤（赛事官网的「花絮」类通知可降权） |
 | [NoticeCatcher](https://github.com/DkHrR/noticecatcher) | WhatsApp 通知 → LLM → `.ics`；**「模型提议、普通代码决定」**：模型只原样复制日期短语，绝不做日期换算，由 resolver 用规则解析并校验来源消息真实存在 | **本次日历修复的核心范式**，见 §1.3 |
 | [OctoAgenda](https://github.com/funsaized/OctoAgenda) | 网页 markdown → Claude 抽事件 → schema 校验 → ICS，事件含 `title/startTime/location/description/url` | 事件 schema 与 ICS 字段设计 |
@@ -63,14 +63,14 @@ LLM 不擅长「下周一到底是哪天」「无年份的 8 月 10 日该补哪
 
 ## 二、现状问题：日历为什么只显示发布日期
 
-代码审查（逐行核实）结论：`worker/src/handlers/feed.ts:310` 是 `deadline || date` 兜底，
+代码审查（逐行核实）结论：`cloudflare/src/handlers/feed.ts:310` 是 `deadline || date` 兜底，
 `deadline` 为空时 ICS 的 `DTSTART` 就退化成发布日期。而 `deadline` 为空有三层原因：
 
 | # | 根因 | 位置 |
 |---|---|---|
-| B1 | **正文从未进入归档 payload**：`meta` 只抓列表页（`enrich=False`），带正文的 `detailed` 只进发信链路；`all_items` 没有合并它 | `yds/main.py:210-213`、`yds/sources.py:179,246` |
-| B2 | **`seen.json` 不存 summary / deadline / 正文**，`notices_from_state()` 重建的 Notice 只有标题与 URL，抽日期无从下手 | `yds/state.py:93-104`、`yds/publish.py:107-124` |
-| B3 | **`extract_deadline()` 只从关键词命中点向后取 42 字**；「决赛于 8 月 10 日举行」的日期在关键词之前 → 漏；且无年份时用 `datetime.now().year` 补年 | `yds/publish.py:26-45`、`yds/models.py:142-159` |
+| B1 | **正文从未进入归档 payload**：`meta` 只抓列表页（`enrich=False`），带正文的 `detailed` 只进发信链路；`all_items` 没有合并它 | `backend/main.py:210-213`、`backend/sources.py:179,246` |
+| B2 | **`seen.json` 不存 summary / deadline / 正文**，`notices_from_state()` 重建的 Notice 只有标题与 URL，抽日期无从下手 | `backend/state.py:93-104`、`backend/publish.py:107-124` |
+| B3 | **`extract_deadline()` 只从关键词命中点向后取 42 字**；「决赛于 8 月 10 日举行」的日期在关键词之前 → 漏；且无年份时用 `datetime.now().year` 补年 | `backend/publish.py:26-45`、`backend/models.py:142-159` |
 
 测试盲区：现有用例只覆盖「日期写在标题、关键词在前」，`deadline` 被写死为 `2026-11-25`，从未测过空值退化路径。
 
@@ -81,7 +81,7 @@ LLM 不擅长「下周一到底是哪天」「无年份的 8 月 10 日该补哪
 > 用户要求：AI 相关功能目录清晰，**提示词单独存放**。
 
 ```
-prompts/                              # 提示词（纯文本，独立 Git 管理，不掺代码）
+backend/prompts/                              # 提示词（纯文本，独立 Git 管理，不掺代码）
 ├── README.md                          # 编写规范、变量表、输出契约、评审与回归流程
 ├── manifest.yaml                      # 版本 + 模型参数 + schema 指针 + changelog
 ├── notices/
@@ -93,7 +93,7 @@ prompts/                              # 提示词（纯文本，独立 Git 管�
     ├── analysis.schema.json           # 输出 JSON Schema（运行时校验 + CI 校验）
     └── examples.json                  # few-shot 样例（含「日期在关键词之后」等回归样本）
 
-yds/ai/                               # AI 能力子包（与业务逻辑解耦）
+backend/ai/                               # AI 能力子包（与业务逻辑解耦）
 ├── __init__.py                        # 只暴露 analyze_notices / AiResult
 ├── client.py                          # OpenAI 兼容客户端（DeepSeek 默认、thinking 关闭、判空重试）
 ├── prompts.py                         # 加载 manifest / 渲染模板 / 版本校验
@@ -106,7 +106,7 @@ docs/AI推送设计方案.md                 # 本文
 tests/fixtures/ai_sample_response.json # 离线回归样本（不联网）
 ```
 
-**分层原则**：`yds/ai/` 不 import `yds.models` / `yds.publish`，只接受纯数据（dict）并返回纯数据；
+**分层原则**：`backend/ai/` 不 import `backend.models` / `backend.publish`，只接受纯数据（dict）并返回纯数据；
 `main.py` 负责把 `Notice` 转成输入、把结果写回 `Notice`。这样 AI 模块可独立测试与替换 provider。
 
 ---
@@ -163,7 +163,7 @@ tests/fixtures/ai_sample_response.json # 离线回归样本（不联网）
 
 ### 4.3 Worker 侧必须同步
 
-`worker/src/handlers/feed.ts` 的 `interface Notice` 与 `normalizeNotice()` 是**共用白名单**，
+`cloudflare/src/handlers/feed.ts` 的 `interface Notice` 与 `normalizeNotice()` 是**共用白名单**，
 新增字段必须同时加进类型声明与清洗函数，否则 POST 与读取两端都静默丢弃。
 
 - `handleCalendar()`：有 `aiEvents` 时**每个事件生成一个 VEVENT**，`DTSTART` 取 `event.date`，
@@ -199,12 +199,12 @@ schema 校验 + 日期确定性归一化 + evidence 校验
    「重建后依然拿得到」的稳定字段（uid / 标题 / 发布日期 / URL / 正文前缀 / 提示词版本）。
 2. 调用点不在 `candidates` 之后，而在**归档全集 `all_items`** 上。因为用户看到的是
    历史 20 条日历事件，只分析新公告无法修复存量数据。历史条目走
-   `yds/ai/body.py` 按 `ai_backfill_limit=12` **渐进式**补抓详情页正文，并把正文也写进
+   `backend/ai/body.py` 按 `ai_backfill_limit=12` **渐进式**补抓详情页正文，并把正文也写进
    `ai.json` 缓存 —— 收敛后零额外请求；即使 AI 未启用，规则抽取也能用这份正文修好日历。
 
 - 缓存全部命中后（通常两三轮）→ **零 API 调用**、零官网详情页请求；
 - 官网修订标题/正文 → `inputHash` 变 → 只重算该条；
-- 提示词升版（`prompts/manifest.yaml` 的 `active`）→ 全量重算一次；
+- 提示词升版（`backend/prompts/manifest.yaml` 的 `active`）→ 全量重算一次；
 - 模型漏答的条目写一份 `fallback` 空缓存，避免每轮为它重复调用；
 - 归档同步块保持每轮无条件执行，靠 `payload_fingerprint` 决定是否 POST 一次 KV。
 
@@ -265,9 +265,9 @@ AI_BATCH_SIZE="8"                 # [GH]
 AI_MAX_BODY_CHARS="3000"          # [GH] 单条正文截断
 ```
 
-**不设 `AI_PROMPT_VERSION`**：提示词版本由 `prompts/manifest.yaml` 的 `active` 单一决定，
+**不设 `AI_PROMPT_VERSION`**：提示词版本由 `backend/prompts/manifest.yaml` 的 `active` 单一决定，
 避免双源不一致。改 `active` 自动让 `data/ai.json` 全量失效重算。
-`config.yaml` 另有业务参数 `ai_backfill_limit: 12`（每轮回填多少条历史正文）。
+`config/config.yaml` 另有业务参数 `ai_backfill_limit: 12`（每轮回填多少条历史正文）。
 
 CI 同步：`notify.yml` job 级 `env` 注入（含默认值）、`保存状态` 的 `git add` 加
 `data/ai.json`；`scripts/lib.sh` 的 `GH_KEYS` 加入上述键（空值跳过）。
@@ -283,7 +283,7 @@ CI 同步：`notify.yml` job 级 `env` 注入（含默认值）、`保存状态`
 | schema | 「日期在关键词之后」「无年份跨年」「evidence 不存在」「非法日期」「非法分类」「空白 content」 |
 | 缓存 | 同 hash 命中不调用；prompt 升版全量失效；损坏文件 fail-closed |
 | 客户端 | mock OpenAI 响应，覆盖 JSON 正常 / 空白 content / 超时重试 / 5xx |
-| Python 契约 | `yds.selftest` 增补，全部离线不联网 |
+| Python 契约 | `backend.selftest` 增补，全部离线不联网 |
 | Worker e2e | 新增白名单字段透传、多 VEVENT、UID 稳定、SEQUENCE 变化、无 AI 事件时回退发布日期 |
 | 端到端 | CI 真实跑一轮，校验 `data/ai.json` 回写、线上 RSS/ICS 的事件日期不再是发布日期 |
 
@@ -293,5 +293,5 @@ CI 同步：`notify.yml` job 级 `env` 注入（含默认值）、`保存状态`
 
 - **本期（已实现）**：调研与设计、目录与提示词、AI 客户端/校验/缓存/编排、日历真实事件日、
   邮件与归档/RSS 展示 AI 结果、紧急度推送、配置与文档、全量测试与部署。
-- **预留（manifest 已占位）**：`prompts/digest/` AI 生成摘要邮件导语；
+- **预留（manifest 已占位）**：`backend/prompts/digest/` AI 生成摘要邮件导语；
   按用户画像做个性化推送；AI 打分做噪声过滤；把 `ai.json` 迁到 KV/D1（当订阅量上来后）。

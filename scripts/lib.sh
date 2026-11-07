@@ -15,7 +15,7 @@ set -euo pipefail
 
 PROJECT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SCRIPTS_DIR="$PROJECT_ROOT/scripts"
-WORKER_DIR="$PROJECT_ROOT/worker"
+WORKER_DIR="$PROJECT_ROOT/cloudflare"
 CONFIG_FILE="${CONFIG_FILE:-$PROJECT_ROOT/.env}"
 CONFIG_EXAMPLE="$PROJECT_ROOT/.env.example"
 DEV_VARS="$WORKER_DIR/.dev.vars"
@@ -132,7 +132,7 @@ site_url() {
 # JSON 字符串转义（用于 wrangler secret bulk 的临时文件）
 json_escape() { printf '%s' "$1" | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g'; }
 
-# Wrangler 一律在 worker/ 目录下执行，避免读错配置
+# Wrangler 一律在 cloudflare/ 目录下执行，避免读错配置
 wrangler() { (cd "$WORKER_DIR" && npx --no-install wrangler "$@"); }
 
 require_login() {
