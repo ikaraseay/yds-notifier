@@ -87,6 +87,10 @@ if (!/^[a-zA-Z0-9_-]+$/.test(kvId)) {
   console.error(`[sync-config] KV_SUBS_ID 含非法字符：${kvId}`);
   process.exit(1);
 }
+if (kvId === "REPLACE_WITH_YOUR_KV_ID") {
+  console.error("[sync-config] 未提供 KV_SUBS_ID（.env 或 Build variables），已中止以免部署无效绑定");
+  process.exit(1);
+}
 if (customDomain && (!/^[a-z0-9.-]+$/.test(customDomain) || !customDomain.includes("."))) {
   console.error(`[sync-config] CUSTOM_DOMAIN 不是合法 hostname：${customDomain}`);
   process.exit(1);

@@ -12,7 +12,7 @@
 > 自动汇总中国研究生创新实践系列大赛的官方通知，按订阅偏好合并成一封邮件推送。
 > 抓取与发信跑在 GitHub Actions，订阅中心跑在 Cloudflare Workers，日常运行落在各家免费额度内。
 
-**在线服务**：[https://notice.example.com][live-url] · **仓库**：[ikaraseay/yds-notifier][repo-url]
+**在线服务**：自定义域名（见 [部署指南](docs/Cloudflare自动部署指南.md)） · **仓库**：[ikaraseay/yds-notifier][repo-url]
 
 <details>
 <summary><strong>目录</strong></summary>
@@ -121,7 +121,7 @@ flowchart LR
 
 部署链路：push 到 `main` → Workers Builds 在 `worker/` 目录执行
 `npm ci && npm run sync-config && npm run build` → esbuild 产出 `dist/index.js` → `npx wrangler deploy`。
-`sync-config` 从 `.env` / Build variables 读取自定义域名与 KV id，写入 `wrangler.toml` 的 `AUTO-CONFIG` 区块。
+`sync-config` 从 `.env` / Build variables 读取自定义域名与 KV id，写入 `wrangler.toml` 的 `AUTO-CONFIG` 区块；仓库内只保留占位符，真实值不入库。
 
 > Workers Builds 的 Build variables 只在构建期可见；运行时配置填在 Variables and Secrets，
 > Wrangler 本地调试读取 `worker/.dev.vars`。
@@ -270,7 +270,7 @@ Dashboard → Worker → **Settings → Builds → Connect to Git**：
 | Root directory | `worker` |
 | Build command | `npm ci && npm run sync-config && npm run build` |
 | Deploy command | `npx wrangler deploy` |
-| Build variables | `KV_SUBS_ID`；使用自定义域名时加 `CUSTOM_DOMAIN` |
+| Build variables | `KV_SUBS_ID`（建议设为 secret）；使用自定义域名时加 `CUSTOM_DOMAIN` |
 
 自定义域名要求 zone 已接入 Cloudflare，绑定后 DNS 记录与证书自动创建。
 `wrangler.toml` 设置 `workers_dev = true`，保留 `workers.dev` 备用入口。
@@ -589,6 +589,5 @@ Disallow: /
 [ts-shield]: https://img.shields.io/badge/TypeScript-5-3178C6?logo=typescript&logoColor=white
 [ts-url]: https://www.typescriptlang.org/
 [live-shield]: https://img.shields.io/badge/status-live-brightgreen
-[live-url]: https://notice.example.com
 [repo-url]: https://github.com/ikaraseay/yds-notifier
 [issues-url]: https://github.com/ikaraseay/yds-notifier/issues

@@ -194,7 +194,7 @@ Worker 会按 Svix 规范验签（时间戳 ±5 分钟防重放），验证通�
 2. `SUBSCRIBE_API_TOKEN`：两边同名同值（不一致 → Actions 拉名单 401）
 3. `CUSTOM_DOMAIN`：两边同值；若 GitHub 侧用了显式 `PUBLIC_BASE_URL`，必须与 Cloudflare 的对外地址一致
 4. `RESEND_WEBHOOK_SECRET` 只在 Cloudflare（Webhook 由 Worker 直接接收），且必须与 Resend 端点显示的签名密钥一致
-4. `MAIL_FROM_ADDRESS` 属于 Resend 已验证域名。发件域名与 `CUSTOM_DOMAIN` **不必相同**：本项目站点在 `notice.example.com`（子域），发件用 `notice@example.com`（根域），只要 Resend 验证的是 `example.com` 即可。改完 `.env` 用 `bash scripts/ops.sh secrets` 一次同步两端
+4. `MAIL_FROM_ADDRESS` 属于 Resend 已验证域名。发件域名与 `CUSTOM_DOMAIN` **不必相同**：站点可以用 `notice.example.com`（子域），发件用 `notice@example.com`（根域），只要 Resend 验证的是 `example.com` 即可。改完 `.env` 用 `bash scripts/ops.sh secrets` 一次同步两端
 
 ---
 
@@ -202,7 +202,7 @@ Worker 会按 Svix 规范验签（时间戳 ±5 分钟防重放），验证通�
 
 1. 生成密钥、创建 KV（`cd worker && npx wrangler kv namespace create SUBS`）
 2. 在根目录 `.env` 填 `CUSTOM_DOMAIN`、`WORKERS_DEV_URL`、`KV_SUBS_ID` 等
-3. `cd worker && npm run sync-config` 把域名与 KV id 写进 `wrangler.toml`，提交推送
+3. `cd worker && npm run sync-config` 在本地生成真实域名与 KV id（**不要提交**，仓库只保留占位符；CI 由 Build variables 注入）
 4. Cloudflare Dashboard → Worker → **Settings → Builds → Connect to Git**，按 3.4 填 Build 配置与 Build variables
 5. 按 3.1 / 3.2 填 Variables and Secrets；按第四节填 GitHub Secrets
 6. 触发首次构建。若 `CUSTOM_DOMAIN` 对应的 zone 已在 Cloudflare，部署会自动创建 DNS 与证书

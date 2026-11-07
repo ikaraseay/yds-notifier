@@ -5,7 +5,7 @@
 # 所有运维脚本都先 source 本文件：
 #   . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 #
-# 约定与 Wofuf-edge 等同类项目 的运维脚本保持一致：
+# 约定与 Wofuf-edge 等同类项目的运维脚本保持一致：
 #   - warn / err 走 stderr，避免被 $() 吞进变量里
 #   - 密钥值一律不回显，只显示长度
 #   - 配置只有 .env 一处真源，逐键读取（不 source 整个文件，避免行尾注释

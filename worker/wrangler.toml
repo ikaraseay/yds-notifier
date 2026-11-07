@@ -18,6 +18,7 @@ workers_dev = true
 # sync-config 会把 .env / 构建变量里的自定义域名与 KV id 同步到下方 AUTO-CONFIG 区块：
 #   CUSTOM_DOMAIN=notice.example.com  → 生成 [[routes]] custom_domain = true
 #   CUSTOM_DOMAIN=none                → 关闭自定义域名，仅用 workers.dev
+# 仓库里只保留占位符，真实值来自 .env（本地）或 Build variables（CI），不入库。
 # 运行时变量不在这里，必须填 Dashboard > Settings > Variables and Secrets。
 # ---------------------------------------------------------------------------
 
@@ -25,10 +26,7 @@ workers_dev = true
 binding = "SUBS"
 # --- BEGIN AUTO-CONFIG (由 npm run sync-config 生成，勿手动修改) ---
 id = "REPLACE_WITH_YOUR_KV_ID"
-
-[[routes]]
-pattern = "notice.example.com"
-custom_domain = true
+# 未配置 CUSTOM_DOMAIN：仅通过 workers.dev 访问
 # --- END AUTO-CONFIG ---
 
 # 限流计数器需要原子写，走 Durable Object 避开 KV 免费版每日 1000 次写配额
