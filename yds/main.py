@@ -322,6 +322,9 @@ def main(argv: List[str] | None = None) -> int:
     log.info("开始探测，共 %s 个数据源", len(sources))
     meta = collect_meta(sources)
     log.info("列表页共 %s 条（%s）", len(meta), fetch.stats_line())
+    robots_note = fetch.robots_summary()
+    if robots_note:
+        log.warning("%s（RESPECT_ROBOTS=%s）", robots_note, fetch.RESPECT_ROBOTS)
     # 无人限制赛事时推进专区分片游标，保证几轮之后 19 项赛事都被扫过
     if zone_cfg and watched is None and zone_all:
         next_offset = 0 if sweep_due else (zone_offset + zone_per_run) % len(zone_all)

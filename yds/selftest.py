@@ -27,6 +27,8 @@ from .ai.client import AiClient, AiClientError, AiConfig
 from .ai.prompts import load_examples, load_prompt, load_schema, render, user_payload
 from .ai.schema import CATEGORIES, input_hash, parse_evidence_date, validate_response
 from .config import derive_base_url, derive_internal_base, settings
+from . import fetch as fetch_mod
+from .robots import parse as parse_robots
 from .mailer import build_html, build_subject, build_text, sort_notices
 from .lock import RunLock
 from .models import Attachment, Notice, by_recency
@@ -284,6 +286,39 @@ def main() -> int:
     src_main = (Path(__file__).with_name("main.py")).read_text(encoding="utf-8")
     check("超龄条目标已读的代码在位", "state.mark(stale_items)" in src_main)
     check("无新公告分支会保存超龄标记", "stale_marked" in src_main)
+
+    print("\n[9e] robots.txt 判定与抓取策略")
+    all_blocked = parse_robots("User-agent: *\nDisallow: /\n", ua_token="yds-notifier/1.0")
+    check("Disallow: / 时全站禁止", not all_blocked.allows("/cw/contestNews/list/6/1"))
+    empty_rules = parse_robots("User-agent: *\nDisallow:\n")
+    check("空 Disallow 表示不限制", empty_rules.allows("/anything"))
+    check("空内容视为无规则", parse_robots("").empty)
+    parts = parse_robots(
+        "User-agent: *\nDisallow: /cw/\nAllow: /cw/contestNews/\n",
+    )
+    check("最长匹配优先（Allow 覆盖父目录）", parts.allows("/cw/contestNews/list/6/1"))
+    check("父目录仍被禁止", not parts.allows("/cw/pw/notice/list/1"))
+    suffix = parse_robots("User-agent: *\nDisallow: /*.pdf$\n")
+    check("通配 + $ 结尾", not suffix.allows("/files/a.pdf"))
+    check("$ 只锚定结尾", suffix.allows("/files/a.pdf.html"))
+    specific = parse_robots(
+        "User-agent: *\nDisallow: /\n\nUser-agent: yds-notifier\nDisallow: /private/\n",
+        ua_token="yds-notifier/1.0",
+    )
+    check("专属 UA 组优先于 *", specific.allows("/public/x") and not specific.allows("/private/x"))
+    check("抓取标识不伪装浏览器", "Mozilla" not in fetch_mod.UA and "yds-notifier" in fetch_mod.UA)
+    # 策略开关：enforce 一个字节都不请求，warn 只提示，off 完全不校验
+    fetch_mod.reset_stats()
+    fetch_mod._robots_cache["blocked.test"] = parse_robots("User-agent: *\nDisallow: /\n")
+    fetch_mod.set_respect_robots("enforce")
+    check("enforce 下拒绝被禁地址", not fetch_mod.robots_allows("https://blocked.test/a"))
+    check("enforce 下不发起请求（返回空串）", fetch_mod.get_text("https://blocked.test/a") == "")
+    fetch_mod.set_respect_robots("warn")
+    check("warn 下只提示不拦截", fetch_mod.robots_allows("https://blocked.test/a"))
+    fetch_mod.set_respect_robots("off")
+    check("off 下不校验", fetch_mod.robots_allows("https://blocked.test/a"))
+    check("汇总行列出主机与次数", "blocked.test" in fetch_mod.robots_summary())
+    fetch_mod.set_respect_robots("enforce")
 
     print("\n[10] 归档同步不会被「无新公告」提前返回跳过")
     # 回归守卫：同步曾写在 `if not fresh: return 0` 之后，导致没有新公告时

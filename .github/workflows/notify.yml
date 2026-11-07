@@ -58,6 +58,9 @@ jobs:
       # 归档 / RSS / 日历的数据同步；NOTICES_API_URL 不填时自动派生
       NOTICES_API_URL: ${{ secrets.NOTICES_API_URL }}
       PUBLISH_NOTICES: ${{ secrets.PUBLISH_NOTICES || 'true' }}
+      # 抓取标识与 robots.txt 策略（见 README「数据来源与免责声明」）
+      CRAWLER_UA: ${{ secrets.CRAWLER_UA }}
+      RESPECT_ROBOTS: ${{ secrets.RESPECT_ROBOTS || 'enforce' }}
       # AI 分析（OpenAI 兼容接口，默认 DeepSeek）；提示词在 prompts/ 目录
       AI_ENABLED: ${{ secrets.AI_ENABLED || 'true' }}
       AI_API_KEY: ${{ secrets.AI_API_KEY }}
