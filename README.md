@@ -255,11 +255,13 @@ npx wrangler deploy --dry-run --outdir /tmp/yds-dryrun
 
 ```bash
 cd worker
-npx wrangler login
 npx wrangler kv namespace create SUBS   # 把返回的 id 填进 .env 的 KV_SUBS_ID
 npm run sync-config                     # 写入自定义域名 routes 与 KV id
-npm run deploy                          # 首次部署，之后交给 Workers Builds
+bash ../scripts/ops.sh deploy           # 首次部署；凭据取自 .env 的账户级 Token
 ```
+
+`.env` 里的 `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` 由 `ops.sh` 注入 wrangler，
+不需要 `wrangler login`，也不需要 R2 的 Access Key / Secret。只有完全不配 Token 时才走登录态。
 
 Dashboard → Worker → **Settings → Builds → Connect to Git**：
 
@@ -296,7 +298,7 @@ GitHub 侧需要 `gh auth login --web --scopes "repo,workflow"`。
 | Cloudflare → Secrets | `UNSUB_SECRET` · `SUBSCRIBE_API_TOKEN` · `RESEND_API_KEY`，可选 `UNSUB_SECRET_PREVIOUS` · `RESEND_WEBHOOK_SECRET` |
 | Cloudflare → Variables | `CUSTOM_DOMAIN` 或 `WORKERS_DEV_URL` · `MAIL_FROM_ADDRESS` · `MAIL_TO`，以及显示名与限流参数 |
 | Cloudflare → Bindings | `SUBS`（KV） · `RATE`（Durable Object） |
-| GitHub → Actions Secrets | 与 Cloudflare 同名同值的密钥、域名、发信配置；`AI_API_KEY`；可选 `PUBLISH_NOTICES` · `HEARTBEAT_URL` · `ALERT_WEBHOOK_URL` · R2 凭证 |
+| GitHub → Actions Secrets | 与 Cloudflare 同名同值的密钥、域名、发信配置；`AI_API_KEY`；`CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN`（R2 状态与兜底部署）；可选 `PUBLISH_NOTICES` · `HEARTBEAT_URL` · `ALERT_WEBHOOK_URL` |
 
 `UNSUB_SECRET` 两端相同，`SUBSCRIBE_API_TOKEN` 两端同名同值，`CUSTOM_DOMAIN` 两端同值；
 `UNSUB_URL` / `SUBSCRIBE_API_URL` / `NOTICES_API_URL` 由代码派生，无需填写。
@@ -393,17 +395,18 @@ AI 只在 GitHub Actions 的 Python 端运行，Worker 不调用模型。默认�
 
 ### 状态后端
 
-Python 状态默认存放在 **Cloudflare R2**（S3 兼容对象存储），未配置凭证时回退到本地 JSON + git 回写。
+Python 状态默认存放在 **Cloudflare R2**，通过 REST API 读写；未配置账户级 Token 时回退到本地 JSON + git 回写。
 对象布局为 `state/<文件名>.json.gz`，一个状态一个对象：
 
 | 变量 | 说明 |
 |---|---|
-| `R2_ACCOUNT_ID` | Cloudflare 账户 ID |
-| `R2_ACCESS_KEY_ID` / `R2_SECRET_ACCESS_KEY` | R2 → Manage API Tokens 创建的「对象读写」令牌 |
+| `CLOUDFLARE_ACCOUNT_ID` / `CLOUDFLARE_API_TOKEN` | 账户级 API Token，权限 `Workers R2 Storage Read/Write`（与部署共用同一个） |
 | `R2_BUCKET` / `R2_PREFIX` | 桶名（为空即不启用）/ 前缀，默认 `state` |
 | `STATE_BACKEND` | `auto`（默认）/ `local`（强制本地文件 + git 回写） |
 
-上传带 `If-Match` 条件写，远端被别的运行改过时报冲突并保留对方版本；内容未变的文件不产生写操作。
+上传前用远端 ETag 做一次条件读取，被别的运行改过时报冲突并保留对方版本；
+REST API 没有原子 `If-Match`，并发窗口由 Actions 的 `concurrency` 与本地运行锁收敛。
+内容未变的文件不产生写操作。
 R2 读不到（网络 / 权限 / 桶名错）或状态对象全丢时直接中止，避免用陈旧基线重复发信。
 写回失败会落 `data/.state-push-failed`，由 CI 的「保存状态」步骤把任务标红。
 日常通过 `bash scripts/ops.sh r2 <子命令>` 查看、比对与维护远端对象。
@@ -478,7 +481,7 @@ yds-notifier/
 | `deploy` | 构建并部署 Worker，随后探测 `/health` |
 | `notify normal\|check` / `logs` | 触发或查看 GitHub Actions |
 | `r2 status\|diff\|pull\|seed\|refresh\|enable` | 查看 / 比对 / 维护 R2 状态对象 |
-| `login` / `logout` | 登录 / 登出 Cloudflare |
+| `login` / `logout` | 可选：完全没有配置账户级 Token 时才用 wrangler 登录态 |
 
 | 想做的事 | 改哪里 |
 |---|---|

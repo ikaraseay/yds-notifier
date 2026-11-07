@@ -2,9 +2,9 @@
 # =============================================================================
 # 启用 R2 状态存储（把 data/*.json 从 git 搬到 Cloudflare R2）
 #
-#   bash scripts/r2-enable.sh                   .env 里已有凭证时直接执行
-#   R2_ACCESS_KEY_ID=… R2_SECRET_ACCESS_KEY=… bash scripts/r2-enable.sh
-#                                               顺带把凭证写进 .env
+#   bash scripts/r2-enable.sh                   .env 里已有凭据时直接执行
+#   CLOUDFLARE_ACCOUNT_ID=… CLOUDFLARE_API_TOKEN=… bash scripts/r2-enable.sh
+#                                               顺带把凭据写进 .env
 #   bash scripts/r2-enable.sh --dry-run         只校验与比对，不写远端、不动 CI
 #   bash scripts/r2-enable.sh --no-secrets      建基线但不改 GitHub Secrets
 #   bash scripts/r2-enable.sh --refresh         用最新已发布状态覆盖远端基线
@@ -35,40 +35,40 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PY="$ROOT/.venv/bin/python"
 [ -x "$PY" ] || PY="$(command -v python3 || true)"
 [ -n "$PY" ] || die "找不到 python3"
-R2_KEYS=(STATE_BACKEND R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET R2_PREFIX)
+R2_KEYS=(STATE_BACKEND CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN R2_BUCKET R2_PREFIX)
 
-# load_config 会用意 .env 的值覆盖同名环境变量，所以命令行传入的凭证要先接住
-IN_ID="${R2_ACCESS_KEY_ID:-}"
-IN_SECRET="${R2_SECRET_ACCESS_KEY:-}"
+# load_config 会用 .env 的值覆盖同名环境变量，所以命令行传入的凭据要先接住
+IN_ACCOUNT="${CLOUDFLARE_ACCOUNT_ID:-}"
+IN_TOKEN="${CLOUDFLARE_API_TOKEN:-}"
 
 load_config
 
-# ── 1. 凭证：允许从命令行环境变量带进来，省去手改 .env ───────────────────────
-step "1/5 凭证"
+# ── 1. 凭据：允许从命令行环境变量带进来，省去手改 .env ───────────────────────
+step "1/5 凭据"
 changed=0
-if [ -n "$IN_ID" ] && [ "$IN_ID" != "$(config_get R2_ACCESS_KEY_ID)" ]; then
-  config_set R2_ACCESS_KEY_ID "$IN_ID"; changed=1
+if [ -n "$IN_ACCOUNT" ] && [ "$IN_ACCOUNT" != "$(config_get CLOUDFLARE_ACCOUNT_ID)" ]; then
+  config_set CLOUDFLARE_ACCOUNT_ID "$IN_ACCOUNT"; changed=1
 fi
-if [ -n "$IN_SECRET" ] && [ "$IN_SECRET" != "$(config_get R2_SECRET_ACCESS_KEY)" ]; then
-  config_set R2_SECRET_ACCESS_KEY "$IN_SECRET"; changed=1
+if [ -n "$IN_TOKEN" ] && [ "$IN_TOKEN" != "$(config_get CLOUDFLARE_API_TOKEN)" ]; then
+  config_set CLOUDFLARE_API_TOKEN "$IN_TOKEN"; changed=1
 fi
 if [ "$changed" -eq 1 ]; then
-  ok "已从命令行接收凭证并写入 .env"
+  ok "已从命令行接收凭据并写入 .env"
   load_config   # 重新载入，下面的连通性检查才用得上新值
 fi
 missing=()
-for k in R2_ACCOUNT_ID R2_ACCESS_KEY_ID R2_SECRET_ACCESS_KEY R2_BUCKET; do
+for k in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN R2_BUCKET; do
   [ -n "$(config_get "$k")" ] || missing+=("$k")
 done
 if [ "${#missing[@]}" -gt 0 ]; then
   err "缺少：${missing[*]}"
-  acct="${R2_ACCOUNT_ID:-${CLOUDFLARE_ACCOUNT_ID:-}}"
-  note "在这两个页面生成（Secret 只显示一次，关掉就看不到了）："
-  [ -n "$acct" ] && note "  控制台     https://dash.cloudflare.com/$acct/r2/api-tokens"
-  note "  R2 → Manage API Tokens → Create：权限 Object Read & Write → 仅 ${R2_BUCKET:-yds-state} → 永久"
+  acct="${CLOUDFLARE_ACCOUNT_ID:-}"
+  note "在 Manage Account → Account API Tokens → Create Token 创建账户级令牌："
+  note "  权限 Workers R2 Storage Read/Write → 仅 ${R2_BUCKET:-yds-state} → 永久"
+  [ -n "$acct" ] && note "  控制台 https://dash.cloudflare.com/$acct/api-tokens"
   exit 1
 fi
-ok "账户 ${R2_ACCOUNT_ID:0:8}… / 桶 ${R2_BUCKET} / 前缀 ${R2_PREFIX:-state}"
+ok "账户 ${CLOUDFLARE_ACCOUNT_ID:0:8}… / 桶 ${R2_BUCKET} / 前缀 ${R2_PREFIX:-state}"
 
 # ── 2. 连通性 ────────────────────────────────────────────────────────────────
 step "2/5 连通性"

@@ -1,16 +1,18 @@
-"""R2 状态对象存储（S3 兼容）。
+"""R2 状态对象存储（Cloudflare REST API）。
 
 为什么需要：运行状态原先靠 `git commit` 在两次 Actions 之间传递 —— 会冲突、
-会污染历史、`ai.json` 572 KB 永久留在仓库里。R2 只有一个 PUT/GET，
-并且支持 `If-Match` 条件写，可以真正防并发覆盖（比本地 flock 强，跨机器也有效）。
+会污染历史、`ai.json` 572 KB 永久留在仓库里。R2 只有 PUT/GET/LIST，
+把状态从仓库搬出去，跨机器共享也只需一个桶。
 
 设计要点：
+- **一个凭据**：只用账户级 `CLOUDFLARE_API_TOKEN`（Workers R2 Storage Read/Write），
+  不再需要 R2 的 Access Key / Secret；请求走 `api.cloudflare.com`。
 - **对上层透明**：本地仍然读写普通 JSON 文件（`data/*.json`），这里负责在运行
   开始前把它们拉下来、结束后上传回去。业务代码完全不知道对象存储存在。
 - **gzip 存储**：本地明文、远端压缩，572 KB → 166 KB；
   `mtime=0` 保证同样的内容压缩结果稳定，便于用哈希判断"是否真的变了"。
 - **按对象拆分**：一个逻辑状态一个 key，某个对象损坏不会拖垮其余状态。
-- **客户端可注入**：测试用假 client，不联网、不依赖 boto3 是否安装。
+- **客户端可注入**：测试用假 client，不联网。
 """
 
 from __future__ import annotations
@@ -18,8 +20,12 @@ from __future__ import annotations
 import gzip
 import hashlib
 import io
+import json
 import logging
 import os
+import urllib.error
+import urllib.parse
+import urllib.request
 from typing import Dict, Optional
 
 log = logging.getLogger("yds")
@@ -35,10 +41,11 @@ STATE_FILES = (
 )
 
 _GZIP_MAGIC = b"\x1f\x8b"
+_API = "https://api.cloudflare.com/client/v4"
 
 
 class StateConflict(RuntimeError):
-    """条件写失败：远端已被别的运行改过（If-Match 不匹配）。"""
+    """条件写失败：远端已被别的运行改过（ETag 已变化）。"""
 
 
 class StateUnavailable(RuntimeError):
@@ -49,13 +56,101 @@ class StateUnavailable(RuntimeError):
     """
 
 
+class _RestError(Exception):
+    def __init__(self, status: int, message: str, code: object = None):
+        self.status = status
+        self.code = code
+        super().__init__(f"HTTP {status}: {message}")
+
+
+class _RestClient:
+    """最小 R2 REST 客户端：list / get / put，鉴权只用账户级 API Token。"""
+
+    def __init__(self, account_id: str, api_token: str, bucket: str, timeout: int = 30):
+        self.bucket = bucket
+        self.timeout = timeout
+        self.base = (
+            f"{_API}/accounts/{account_id}/r2/buckets/"
+            f"{urllib.parse.quote(bucket, safe='')}/objects"
+        )
+        self._headers = {"Authorization": f"Bearer {api_token}"}
+
+    def _request(self, method: str, key: str = "", params=None, body=None, headers=None):
+        url = self.base + (f"/{urllib.parse.quote(key, safe='/')}" if key else "")
+        if params:
+            url += "?" + urllib.parse.urlencode(params)
+        req = urllib.request.Request(
+            url, data=body, method=method, headers={**self._headers, **(headers or {})}
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout) as resp:
+                return resp.status, resp.headers, resp.read()
+        except urllib.error.HTTPError as exc:
+            raw = exc.read()
+            message, code = raw[:200].decode("utf-8", "replace"), None
+            try:
+                errors = (json.loads(raw) or {}).get("errors") or []
+                if errors:
+                    code = errors[0].get("code")
+                    message = "；".join(str(e.get("message") or "") for e in errors)
+            except ValueError:
+                pass
+            raise _RestError(exc.code, message, code) from exc
+        except OSError as exc:
+            raise _RestError(0, str(exc)) from exc
+
+    def list_objects(self, prefix: str = "") -> list[dict]:
+        out: list[dict] = []
+        cursor = None
+        while True:
+            params = {"prefix": prefix, "per_page": 1000}
+            if cursor:
+                params["cursor"] = cursor
+            _, _, raw = self._request("GET", params=params)
+            payload = json.loads(raw)
+            out.extend(payload.get("result") or [])
+            info = payload.get("result_info") or {}
+            if not info.get("is_truncated"):
+                break
+            cursor = info.get("cursor")
+            if not cursor:
+                break
+        return out
+
+    def get_object(self, key: str) -> dict:
+        _, headers, body = self._request("GET", key=key)
+        return {"Body": io.BytesIO(body), "ETag": (headers.get("ETag") or "").strip('"')}
+
+    def put_object(self, key: str, body: bytes, etag: str = "") -> dict:
+        if etag:
+            # REST 的 PutObject 不支持原子 If-Match；先做一次条件读取，
+            # ETag 变了就按冲突处理（并发窗口极小，Actions 还另有 concurrency 约束）。
+            try:
+                self._request("GET", key=key, headers={"If-None-Match": f'"{etag}"'})
+            except _RestError as exc:
+                if exc.status == 304:
+                    pass
+                elif exc.status == 404:
+                    raise StateConflict(f"{key} 已被其他运行删除") from exc
+                else:
+                    raise
+            else:
+                raise StateConflict(f"{key} 已被其他运行修改（ETag 不匹配）")
+        _, headers, _ = self._request(
+            "PUT",
+            key=key,
+            body=body,
+            headers={"Content-Type": "application/json", "Content-Encoding": "gzip"},
+        )
+        return {"ETag": (headers.get("ETag") or "").strip('"')}
+
+
 class R2StateStore:
     def __init__(
         self,
         bucket: str,
         account_id: str = "",
-        access_key_id: str = "",
-        secret_access_key: str = "",
+        api_token: str = "",
         prefix: str = "state",
         client=None,
     ):
@@ -63,8 +158,8 @@ class R2StateStore:
         self.account_id = account_id
         self.prefix = (prefix or "state").strip("/")
         self._client = client
-        self._credentials = (account_id, access_key_id, secret_access_key)
-        # 拉取时记下远端的 ETag 与内容哈希，push 时用于条件写与"跳过未变对象"
+        self._credentials = (account_id, api_token)
+        # 拉取时记下远端的 ETag 与内容哈希，push 时用于冲突检测与"跳过未变对象"
         self._etags: Dict[str, str] = {}
         self._hashes: Dict[str, str] = {}
         self._ready = False  # 远端是否已初始化过（见 _ready_key）
@@ -72,7 +167,7 @@ class R2StateStore:
     # ------------------------------------------------------------------ 基础
     @property
     def client(self):
-        """延迟创建的 S3 客户端（运维脚本用；业务代码只走 pull/push）。"""
+        """延迟创建的 REST 客户端（运维脚本用；业务代码只走 pull/push）。"""
         return self._get_client()
 
     @property
@@ -87,24 +182,10 @@ class R2StateStore:
     def _get_client(self):
         if self._client is not None:
             return self._client
-        account, key_id, secret = self._credentials
-        if not (account and key_id and secret):
+        account, token = self._credentials
+        if not (account and token):
             return None
-        try:
-            import boto3  # 延迟导入：未配置 R2 的部署不需要装也能跑
-            from botocore.config import Config
-        except ImportError:
-            log.error("配置了 R2 但未安装 boto3（pip install boto3），本轮退回本地文件")
-            return None
-
-        self._client = boto3.client(
-            "s3",
-            endpoint_url=f"https://{account}.r2.cloudflarestorage.com",
-            aws_access_key_id=key_id,
-            aws_secret_access_key=secret,
-            region_name="auto",
-            config=Config(retries={"max_attempts": 3, "mode": "standard"}, signature_version="s3v4"),
-        )
+        self._client = _RestClient(account, token, self.bucket)
         return self._client
 
     def key_of(self, name: str) -> str:
@@ -112,6 +193,33 @@ class R2StateStore:
 
     def _ready_key(self) -> str:
         return f"{self.prefix}/_ready.json" if self.prefix else "_ready.json"
+
+    def list_objects(self) -> list[dict]:
+        """列出前缀下的对象，字段保持运维脚本使用的 Key / Size / LastModified。"""
+        client = self._get_client()
+        if client is None:
+            raise StateUnavailable("R2 已配置但客户端不可用（检查 CLOUDFLARE_API_TOKEN）")
+        prefix = (self.prefix + "/") if self.prefix else ""
+        return [
+            {
+                "Key": obj.get("key"),
+                "Size": obj.get("size") or 0,
+                "LastModified": obj.get("last_modified"),
+            }
+            for obj in client.list_objects(prefix)
+        ]
+
+    def read_object(self, name: str) -> bytes:
+        """读一个状态对象的原始字节；不存在时抛 FileNotFoundError。"""
+        client = self._get_client()
+        if client is None:
+            raise StateUnavailable("R2 已配置但客户端不可用（检查 CLOUDFLARE_API_TOKEN）")
+        try:
+            return client.get_object(self.key_of(name))["Body"].read()
+        except _RestError as exc:
+            if _is_missing(exc):
+                raise FileNotFoundError(self.key_of(name)) from exc
+            raise
 
     # ------------------------------------------------------------------ 读
     def pull(self, data_dir: str, names=STATE_FILES) -> int:
@@ -123,14 +231,14 @@ class R2StateStore:
         """
         client = self._get_client()
         if client is None:
-            raise StateUnavailable("R2 已配置但客户端不可用（检查凭证与 boto3）")
+            raise StateUnavailable("R2 已配置但客户端不可用（检查 CLOUDFLARE_API_TOKEN）")
         os.makedirs(data_dir, exist_ok=True)
         got = 0
         failures = []
         # 初始化标记：区分"桶里本来就没有状态"（首次运行，可用仓库里的基线）
         # 与"曾经有、现在没了"（桶被清空 / 前缀写错 —— 必须中止，否则全量重发）
         try:
-            client.get_object(Bucket=self.bucket, Key=self._ready_key())
+            client.get_object(self._ready_key())
             self._ready = True
         except Exception as exc:  # noqa: BLE001
             if not _is_missing(exc):
@@ -138,7 +246,7 @@ class R2StateStore:
         for name in names:
             key = self.key_of(name)
             try:
-                obj = client.get_object(Bucket=self.bucket, Key=key)
+                obj = client.get_object(key)
                 body = obj["Body"].read()
                 etag = str(obj.get("ETag") or "").strip('"')
             except Exception as exc:  # noqa: BLE001
@@ -185,22 +293,7 @@ class R2StateStore:
                 result["skipped"].append(name)  # 内容没变，一次写操作都不花
                 continue
             key = self.key_of(name)
-            kwargs = {
-                "Bucket": self.bucket,
-                "Key": key,
-                "Body": body,
-                "ContentType": "application/json",
-                "ContentEncoding": "gzip",
-            }
-            etag = self._etags.get(name)
-            if etag:
-                kwargs["IfMatch"] = f'"{etag}"'
-            try:
-                resp = client.put_object(**kwargs)
-            except Exception as exc:  # noqa: BLE001
-                if _is_precondition(exc):
-                    raise StateConflict(f"{key} 已被其他运行修改（If-Match 不匹配）") from exc
-                raise
+            resp = client.put_object(key, body, etag=self._etags.get(name, ""))
             new_etag = str((resp or {}).get("ETag") or "").strip('"')
             if new_etag:
                 self._etags[name] = new_etag
@@ -210,12 +303,7 @@ class R2StateStore:
         if not self._ready:
             # 首次写回：落下初始化标记，今后"状态全丢"能被识别出来
             try:
-                client.put_object(
-                    Bucket=self.bucket,
-                    Key=self._ready_key(),
-                    Body=b'{"version":1}',
-                    ContentType="application/json",
-                )
+                client.put_object(self._ready_key(), b'{"version":1}')
                 self._ready = True
             except Exception as exc:  # noqa: BLE001 - 标记失败不阻断本轮
                 log.warning("R2 初始化标记写入失败：%s", str(exc)[:120])
@@ -223,19 +311,10 @@ class R2StateStore:
 
 
 def _is_missing(exc: Exception) -> bool:
-    code = str(getattr(exc, "response", {}).get("Error", {}).get("Code") or "")
-    if code in ("NoSuchKey", "404", "NotFound"):
-        return True
+    if isinstance(exc, _RestError):
+        return exc.status == 404 or exc.code in (10007, 10008)
     text = str(exc)
     return "NoSuchKey" in text or "404" in text or "Not Found" in text
-
-
-def _is_precondition(exc: Exception) -> bool:
-    code = str(getattr(exc, "response", {}).get("Error", {}).get("Code") or "")
-    if code in ("PreconditionFailed", "412"):
-        return True
-    text = str(exc)
-    return "PreconditionFailed" in text or "412" in text
 
 
 def build_store(settings, client=None) -> Optional[R2StateStore]:
@@ -246,16 +325,14 @@ def build_store(settings, client=None) -> Optional[R2StateStore]:
     bucket = getattr(settings, "r2_bucket", "") or ""
     if not bucket:
         return None
-    account = getattr(settings, "r2_account_id", "") or ""
-    key_id = getattr(settings, "r2_access_key_id", "") or ""
-    secret = getattr(settings, "r2_secret_access_key", "") or ""
-    if backend != "r2" and not (account and key_id and secret):
+    account = getattr(settings, "cloudflare_account_id", "") or ""
+    token = getattr(settings, "cloudflare_api_token", "") or ""
+    if backend != "r2" and not (account and token):
         return None  # auto 模式下凭证不全就当没配
     store = R2StateStore(
         bucket=bucket,
         account_id=account,
-        access_key_id=key_id,
-        secret_access_key=secret,
+        api_token=token,
         prefix=getattr(settings, "r2_prefix", "state") or "state",
         client=client,
     )

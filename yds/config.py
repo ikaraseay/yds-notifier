@@ -122,12 +122,11 @@ class Settings:
     unsub_ttl_days: int
     subscribe_api_token: str
 
-    # 状态存储（Cloudflare R2，S3 兼容）。三项凭证 + bucket 齐全即启用；
+    # 状态存储（Cloudflare R2）。账户 ID + 账户级 Token + bucket 齐全即启用；
     # STATE_BACKEND=local 可强制回到"本地文件 + git 回写"。
     state_backend: str
-    r2_account_id: str
-    r2_access_key_id: str
-    r2_secret_access_key: str
+    cloudflare_account_id: str
+    cloudflare_api_token: str
     r2_bucket: str
     r2_prefix: str
 
@@ -181,9 +180,8 @@ class Settings:
             unsub_ttl_days=max(1, _i("UNSUB_TTL_DAYS", 180)),
             subscribe_api_token=_s("SUBSCRIBE_API_TOKEN"),
             state_backend=_s("STATE_BACKEND", "auto").lower(),
-            r2_account_id=_s("R2_ACCOUNT_ID"),
-            r2_access_key_id=_s("R2_ACCESS_KEY_ID"),
-            r2_secret_access_key=_s("R2_SECRET_ACCESS_KEY"),
+            cloudflare_account_id=_s("CLOUDFLARE_ACCOUNT_ID"),
+            cloudflare_api_token=_s("CLOUDFLARE_API_TOKEN"),
             r2_bucket=_s("R2_BUCKET"),
             r2_prefix=_s("R2_PREFIX", "state"),
             ai_enabled=_b("AI_ENABLED", True),

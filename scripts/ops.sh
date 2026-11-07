@@ -236,8 +236,7 @@ cmd_logout() { step "登出 Cloudflare"; wrangler logout; ok "已登出"; }
 # ─────────────────────────────────────────────────────────────────────────────
 r2_configured() {
   [ "${STATE_BACKEND:-auto}" != "local" ] && [ -n "${R2_BUCKET:-}" ] \
-    && [ -n "${R2_ACCOUNT_ID:-}" ] && [ -n "${R2_ACCESS_KEY_ID:-}" ] \
-    && [ -n "${R2_SECRET_ACCESS_KEY:-}" ]
+    && [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ] && [ -n "${CLOUDFLARE_API_TOKEN:-}" ]
 }
 
 # 一行摘要，给 status 用
@@ -360,17 +359,30 @@ cmd_doctor() {
   fi
 
   step "Cloudflare"
-  local cf_secrets=""
-  if wrangler whoami 2>/dev/null | grep -qi "account"; then
-    mark_ok "已登录"
-    cf_secrets="$(wrangler secret list 2>/dev/null || true)"
-    for k in RESEND_API_KEY UNSUB_SECRET SUBSCRIBE_API_TOKEN MAIL_FROM_ADDRESS; do
-      printf '%s' "$cf_secrets" | grep -q "\"$k\"" && mark_ok "$k 已设置" \
-        || mark_fail "$k 没设置：bash scripts/ops.sh cf-secrets"
-    done
+  if [ -n "${CLOUDFLARE_API_TOKEN:-}" ]; then
+    local verify_url="https://api.cloudflare.com/client/v4/user/tokens/verify"
+    case "$CLOUDFLARE_API_TOKEN" in
+      cfat_*) verify_url="https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID:-}/tokens/verify" ;;
+    esac
+    local token_code
+    token_code="$(curl -sS -o /dev/null -w '%{http_code}' \
+      -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" "$verify_url" 2>/dev/null || true)"
+    if [ "$token_code" = "200" ]; then
+      mark_ok "CLOUDFLARE_API_TOKEN 有效（部署 / secrets / R2 共用）"
+    else
+      mark_fail "CLOUDFLARE_API_TOKEN 无效或与账户不匹配（HTTP ${token_code:-无响应}）"
+    fi
+  elif wrangler whoami 2>/dev/null | grep -qi "account"; then
+    mark_ok "wrangler 登录态可用"
   else
-    mark_fail "未登录：bash scripts/ops.sh login"
+    mark_fail "没有凭据：在 .env 填 CLOUDFLARE_API_TOKEN，或 bash scripts/ops.sh login"
   fi
+  local cf_secrets=""
+  cf_secrets="$(wrangler secret list 2>/dev/null || true)"
+  for k in RESEND_API_KEY UNSUB_SECRET SUBSCRIBE_API_TOKEN MAIL_FROM_ADDRESS; do
+    printf '%s' "$cf_secrets" | grep -q "\"$k\"" && mark_ok "$k 已设置" \
+      || mark_fail "$k 没设置：bash scripts/ops.sh cf-secrets"
+  done
 
   step "GitHub"
   local gh_secrets=""
@@ -381,6 +393,12 @@ cmd_doctor() {
       printf '%s' "$gh_secrets" | grep -q "^$k" && mark_ok "$k 已设置" \
         || mark_warn "$k 没设置：bash scripts/ops.sh gh-secrets"
     done
+    if r2_configured; then
+      for k in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_API_TOKEN; do
+        printf '%s' "$gh_secrets" | grep -q "^$k" && mark_ok "$k 已设置" \
+          || mark_fail "$k 没设置（R2 状态需要）：bash scripts/ops.sh gh-secrets"
+      done
+    fi
   else
     mark_warn "gh 未登录：gh auth login --web --scopes 'repo,workflow'"
   fi

@@ -972,29 +972,31 @@ def main() -> int:
 
     print("\n[22] 状态对象存储（R2）")
 
-    class FakeS3:
-        """最小 S3 桩：够验证 gzip、ETag 条件写、未变跳过这三件事。"""
+    class FakeREST:
+        """最小 R2 REST 桩：够验证 gzip、ETag 预检、未变跳过这三件事。"""
 
         def __init__(self):
             self.objects = {}
             self.puts = []
             self.fail_precondition = False
 
-        def get_object(self, Bucket, Key):
-            if Key not in self.objects:
-                raise RuntimeError("NoSuchKey: %s" % Key)
-            body, etag = self.objects[Key]
-            return {"Body": io.BytesIO(body), "ETag": '"%s"' % etag}
+        def get_object(self, key):
+            if key not in self.objects:
+                raise RuntimeError("NoSuchKey: %s" % key)
+            body, etag = self.objects[key]
+            return {"Body": io.BytesIO(body), "ETag": etag}
 
-        def put_object(self, Bucket, Key, Body, **kw):
+        def put_object(self, key, body, etag=""):
             if self.fail_precondition:
-                raise RuntimeError("PreconditionFailed: If-Match did not match")
-            etag = hashlib.md5(Body).hexdigest()[:12]
-            self.objects[Key] = (Body, etag)
-            self.puts.append((Key, kw))
-            return {"ETag": '"%s"' % etag}
+                raise StateConflict("PreconditionFailed: ETag 已变化")
+            if etag and key in self.objects and self.objects[key][1] != etag:
+                raise StateConflict("ETag 已变化")
+            new_etag = hashlib.md5(body).hexdigest()[:12]
+            self.objects[key] = (body, new_etag)
+            self.puts.append((key, {"etag": etag}))
+            return {"ETag": new_etag}
 
-    fake = FakeS3()
+    fake = FakeREST()
     src = tempfile.mkdtemp()
     with open(os.path.join(src, "seen.json"), "w", encoding="utf-8") as fh:
         json.dump({"version": 2, "seen": {"a": 1}}, fh)
@@ -1007,9 +1009,7 @@ def main() -> int:
     check("首次上传全部对象", sorted(res["uploaded"]) == ["schedule.json", "seen.json"], str(res))
     body = fake.objects["state/seen.json.gz"][0]
     check("远端对象是 gzip", body[:2] == b"\x1f\x8b")
-    check("上传声明了 gzip 编码",
-          fake.puts[0][1].get("ContentEncoding") == "gzip")
-    check("首次上传不带 If-Match（对象还不存在）", "IfMatch" not in fake.puts[0][1])
+    check("首次上传没有 ETag 预检（对象还不存在）", fake.puts[0][1]["etag"] == "")
     check("首次写回落下初始化标记", "state/_ready.json" in fake.objects)
 
     dst = tempfile.mkdtemp()
@@ -1025,7 +1025,7 @@ def main() -> int:
         json.dump({"version": 2, "seen": {"a": 2}}, fh)
     res = st2.push(dst)
     check("只传变化的对象", res["uploaded"] == ["seen.json"], str(res))
-    check("二次上传带 If-Match", fake.puts[-1][1].get("IfMatch"))
+    check("二次上传带 ETag 预检", fake.puts[-1][1]["etag"])
 
     with open(os.path.join(dst, "schedule.json"), "w", encoding="utf-8") as fh:
         json.dump({"contests": [1]}, fh)
@@ -1038,18 +1038,18 @@ def main() -> int:
 
     check("未配置 bucket 时不启用", R2StateStore(bucket="", client=fake).enabled is False)
 
-    class BrokenS3(FakeS3):
-        def get_object(self, Bucket, Key):
+    class BrokenREST(FakeREST):
+        def get_object(self, key):
             raise RuntimeError("AccessDenied: no permission")
 
     try:
-        R2StateStore(bucket="b", prefix="state", client=BrokenS3()).pull(tempfile.mkdtemp())
+        R2StateStore(bucket="b", prefix="state", client=BrokenREST()).pull(tempfile.mkdtemp())
         check("读不到状态应中止", False, "没有抛 StateUnavailable")
     except StateUnavailable:
         check("读不到状态抛 StateUnavailable（避免用陈旧状态重发）", True)
 
     # 桶被清空：初始化标记还在、状态对象全没了 → 不能当成首次运行
-    emptied = FakeS3()
+    emptied = FakeREST()
     emptied.objects["state/_ready.json"] = (b"{}", "ready")
     try:
         R2StateStore(bucket="bucket", prefix="state", client=emptied).pull(tempfile.mkdtemp())

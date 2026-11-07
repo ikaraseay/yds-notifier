@@ -75,9 +75,8 @@ jobs:
       AI_MAX_BODY_CHARS: ${{ secrets.AI_MAX_BODY_CHARS || '3000' }}
       # 状态存储：填了 R2 就不再往仓库提交状态文件（见「保存状态」步骤）
       STATE_BACKEND: ${{ secrets.STATE_BACKEND || 'auto' }}
-      R2_ACCOUNT_ID: ${{ secrets.R2_ACCOUNT_ID }}
-      R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
-      R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
       R2_BUCKET: ${{ secrets.R2_BUCKET }}
       R2_PREFIX: ${{ secrets.R2_PREFIX || 'state' }}
       REPO_URL: ${{ github.server_url }}/${{ github.repository }}
