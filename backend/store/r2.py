@@ -123,18 +123,17 @@ class _RestClient:
 
     def put_object(self, key: str, body: bytes, etag: str = "") -> dict:
         if etag:
-            # REST 的 PutObject 不支持原子 If-Match；先做一次条件读取，
-            # ETag 变了就按冲突处理（并发窗口极小，Actions 还另有 concurrency 约束）。
+            # REST 接口不处理条件头（实测 If-None-Match / If-Match 都被忽略，
+            # 只有 S3 兼容接口支持原子条件写），只能先读当前 ETag 再比对。
+            # 并发窗口由 Actions 的 concurrency 约束兜住。
             try:
-                self._request("GET", key=key, headers={"If-None-Match": f'"{etag}"'})
+                _, headers, _ = self._request("GET", key=key)
             except _RestError as exc:
-                if exc.status == 304:
-                    pass
-                elif exc.status == 404:
+                if exc.status == 404:
                     raise StateConflict(f"{key} 已被其他运行删除") from exc
-                else:
-                    raise
-            else:
+                raise
+            current = (headers.get("ETag") or "").strip('"')
+            if current != etag:
                 raise StateConflict(f"{key} 已被其他运行修改（ETag 不匹配）")
         _, headers, _ = self._request(
             "PUT",
@@ -297,6 +296,9 @@ class R2StateStore:
             new_etag = str((resp or {}).get("ETag") or "").strip('"')
             if new_etag:
                 self._etags[name] = new_etag
+            else:
+                # REST 的 PUT 响应不带 ETag，旧值已失效；同一进程再写时不做预检
+                self._etags.pop(name, None)
             self._hashes[name] = digest
             result["uploaded"].append(name)
             log.info("R2 已上传 %s（%.1f KB）", key, len(body) / 1024)

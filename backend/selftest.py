@@ -53,6 +53,7 @@ from .schedule import ContestSchedule, ReminderLog, ScheduleStore, parse_schedul
 from .sources import CpipcZonesSource, build_sources
 from .state import State, load_pending, pending_notices, save_pending
 from .store import R2StateStore, StateConflict, StateUnavailable
+from .store.r2 import _RestClient
 from .unsub import (
     build_calendar_url,
     build_list_unsubscribe_headers,
@@ -978,7 +979,6 @@ def main() -> int:
         def __init__(self):
             self.objects = {}
             self.puts = []
-            self.fail_precondition = False
 
         def get_object(self, key):
             if key not in self.objects:
@@ -987,8 +987,6 @@ def main() -> int:
             return {"Body": io.BytesIO(body), "ETag": etag}
 
         def put_object(self, key, body, etag=""):
-            if self.fail_precondition:
-                raise StateConflict("PreconditionFailed: ETag 已变化")
             if etag and key in self.objects and self.objects[key][1] != etag:
                 raise StateConflict("ETag 已变化")
             new_etag = hashlib.md5(body).hexdigest()[:12]
@@ -1029,12 +1027,37 @@ def main() -> int:
 
     with open(os.path.join(dst, "schedule.json"), "w", encoding="utf-8") as fh:
         json.dump({"contests": [1]}, fh)
-    fake.fail_precondition = True
+    # 模拟另一轮运行在 pull 之后改写了远端对象：ETag 变化必须判为冲突
+    fake.objects["state/schedule.json.gz"] = (b'{"contests": [9]}', "other-run")
     try:
         st2.push(dst)
         check("条件写冲突应抛错", False, "没有抛 StateConflict")
     except StateConflict:
         check("条件写冲突抛 StateConflict（不覆盖他人写入）", True)
+
+    # REST 接口会忽略 If-None-Match / If-Match（实测），预检只能用普通 GET 比对
+    class StubREST(_RestClient):
+        def __init__(self):
+            super().__init__("acct", "token", "bucket")
+            self.calls = []
+
+        def _request(self, method, key="", params=None, body=None, headers=None):
+            self.calls.append((method, headers or {}))
+            if method == "GET":
+                return 200, {"ETag": '"v1"'}, b""
+            return 200, {}, b""
+
+    stub = StubREST()
+    stub.put_object("state/seen.json.gz", b"x", etag="v1")
+    check("ETag 预检用普通 GET，不发条件头",
+          stub.calls[0][0] == "GET"
+          and all("If-None-Match" not in h and "If-Match" not in h
+                  for _, h in stub.calls))
+    try:
+        stub.put_object("state/seen.json.gz", b"x", etag="v0")
+        check("远端 ETag 不同应抛冲突", False, "没有抛 StateConflict")
+    except StateConflict:
+        check("远端 ETag 不同抛 StateConflict", True)
 
     check("未配置 bucket 时不启用", R2StateStore(bucket="", client=fake).enabled is False)
 
