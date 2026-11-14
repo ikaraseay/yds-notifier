@@ -57,6 +57,7 @@ Allow: /llms.txt
 
 # 需要登录或邮箱签名的个人页面，不对爬虫开放
 Disallow: /api/
+Disallow: /admin
 Disallow: /dashboard
 Disallow: /login
 Disallow: /confirm

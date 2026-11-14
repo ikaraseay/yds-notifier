@@ -16,6 +16,8 @@ export interface Env {
   UNSUB_SECRET: string;
   UNSUB_SECRET_PREVIOUS?: string; // 密钥轮换期的旧密钥
   RESEND_API_KEY: string;
+  ADMIN_PASSWORD_HASH?: string;
+  ADMIN_SESSION_SECRET?: string;
   SUBSCRIBE_API_TOKEN?: string; // 与 GitHub 同名同值
   /** Resend webhook 的签名密钥（whsec_...），未配置时 webhook 端点关闭 */
   RESEND_WEBHOOK_SECRET?: string;

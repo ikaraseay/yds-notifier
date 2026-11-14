@@ -6,6 +6,7 @@
 #   bash scripts/cf-secrets.sh --dry-run    只列出会写哪些键（不上传）
 #   bash scripts/cf-secrets.sh --list       列出云端已有的 secrets
 #   bash scripts/cf-secrets.sh --only KEY   只写某一项
+#   bash scripts/cf-secrets.sh --admin      一次写入两项管理员密钥
 #
 # 真源是项目根目录的 .env（已忽略，不入库）。空值自动跳过；
 # 用 wrangler secret bulk 一次写入，只产生一个部署版本。
@@ -15,25 +16,32 @@ set -euo pipefail
 . "$(dirname "${BASH_SOURCE[0]}")/lib.sh"
 
 usage() {
-  sed -n '2,12p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,13p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit 0
 }
 
 DRY_RUN=0
 ONLY=""
+ADMIN=0
 while [ "$#" -gt 0 ]; do
   case "$1" in
     --dry-run) DRY_RUN=1 ;;
     --list)    require_login; wrangler secret list; exit 0 ;;
     --only)    shift; ONLY="${1:-}" ;;
+    --admin)   ADMIN=1 ;;
     -h|--help) usage ;;
-    *) die "未知参数：$1（可用 --dry-run / --list / --only KEY）" ;;
+    *) die "未知参数：$1（可用 --dry-run / --list / --only KEY / --admin）" ;;
   esac
   shift || true
 done
 
 load_config
-if [ -n "$ONLY" ]; then
+if [ "$ADMIN" -eq 1 ]; then
+  [ -z "$ONLY" ] || die "--admin 和 --only 不能同时使用"
+  KEYS=("${ADMIN_KEYS[@]}")
+  [[ "$ADMIN_PASSWORD_HASH" =~ ^[[:xdigit:]]{64}$ && ${#ADMIN_SESSION_SECRET} -ge 32 ]] \
+    || die "管理员密钥未正确配置：bash scripts/ops.sh admin-secrets"
+elif [ -n "$ONLY" ]; then
   KEYS=("$ONLY")
 else
   KEYS=("${CF_KEYS[@]}")

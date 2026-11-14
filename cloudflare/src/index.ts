@@ -15,6 +15,7 @@
 
 import { clearSessionCookie, getSession, getUser, readSessionToken } from "./auth";
 import { getConfig, type Env } from "./env";
+import { handleAdmin, handleAdminLogin, handleAdminLogout, handleAdminRemove } from "./handlers/admin";
 import { getCount, handleCount, handleList, handleStats, health } from "./handlers/api";
 import { handleDeleteAccount, handleLogout, handlePrefs } from "./handlers/dashboard";
 import {
@@ -85,7 +86,17 @@ export default {
         return handleCalendar(req, env);
       }
 
-      // ---- 管理接口 ------------------------------------------------------
+      // ---- 管理后台及机器接口 ------------------------------------------------------
+      if (p === "/admin") {
+        if (m !== "GET") return methodNotAllowed("GET");
+        return await handleAdmin(req, env, url);
+      }
+      if (p === "/api/admin/login" || p === "/api/admin/logout" || p === "/api/admin/subscribers/remove") {
+        if (m !== "POST") return methodNotAllowed("POST");
+        if (p === "/api/admin/login") return await handleAdminLogin(req, env);
+        if (p === "/api/admin/logout") return handleAdminLogout(req);
+        return await handleAdminRemove(req, env);
+      }
       if (p === "/api/notices") {
         if (m !== "POST") return methodNotAllowed("POST");
         return handleNoticesPost(req, env);

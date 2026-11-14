@@ -5,6 +5,7 @@
 #   bash scripts/ops.sh doctor        体检：哪里没配好，一次列清楚
 #   bash scripts/ops.sh status        当前状态（配置 / 线上 / 部署 / Actions）
 #   bash scripts/ops.sh secrets       从 .env 同步密钥到 Cloudflare + GitHub
+#   bash scripts/ops.sh admin-secrets  一键生成并上传管理员密钥（--rotate 更换）
 #   bash scripts/ops.sh cf-secrets    只同步 Cloudflare（wrangler）
 #   bash scripts/ops.sh gh-secrets    只同步 GitHub（gh）
 #   bash scripts/ops.sh config        .env 的查看 / 修改 / 校验
@@ -45,7 +46,7 @@ inject_worker_config() {
 trap restore_worker_config EXIT
 
 usage() {
-  sed -n '2,22p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit 0
 }
 
@@ -82,6 +83,10 @@ config_check() {
   check_one "RESEND_API_KEY" "${RESEND_API_KEY:-}" '^re_' 'Resend → API Keys 创建 Sending access'
   check_one "UNSUB_SECRET" "${UNSUB_SECRET:-}" '^[0-9a-f]{32,}$' 'openssl rand -hex 32，两端必须一致'
   check_one "SUBSCRIBE_API_TOKEN" "${SUBSCRIBE_API_TOKEN:-}" '^[0-9a-f]{32,}$' 'openssl rand -hex 32，两端必须一致'
+  if [ -n "${ADMIN_PASSWORD_HASH:-}${ADMIN_SESSION_SECRET:-}" ]; then
+    check_one "ADMIN_PASSWORD_HASH" "${ADMIN_PASSWORD_HASH:-}" '^[[:xdigit:]]{64}$' '运行 bash scripts/ops.sh admin-secrets --rotate'
+    check_one "ADMIN_SESSION_SECRET" "${ADMIN_SESSION_SECRET:-}" '^.{32,}$' '运行 bash scripts/ops.sh admin-secrets --rotate'
+  fi
   check_one "KV_SUBS_ID" "${KV_SUBS_ID:-}" '^[0-9a-f]{32}$' 'wrangler kv namespace create SUBS 的输出'
   check_one "UNSUB_TTL_DAYS" "${UNSUB_TTL_DAYS:-180}" '^[0-9]+$' '退订链接有效天数，默认 180'
   return 0
@@ -145,9 +150,11 @@ cmd_config() {
 }
 
 # 本地开发凭据：Wrangler 只认 cloudflare/ 同目录的 .dev.vars
-cmd_dev_vars() {
+cmd_dev_vars() (
   load_config
   step "生成 $DEV_VARS"
+  umask 077
+  if [ -e "$DEV_VARS" ]; then chmod 600 "$DEV_VARS"; fi
   {
     printf '# 由 scripts/ops.sh dev-vars 生成 —— 改 .env 后重跑，别手改这里\n'
     printf 'PUBLIC_BASE_URL="http://localhost:8787"\n'
@@ -158,6 +165,8 @@ cmd_dev_vars() {
     printf 'UNSUB_SECRET_PREVIOUS="%s"\n' "${UNSUB_SECRET_PREVIOUS:-}"
     printf 'RESEND_API_KEY="%s"\n' "${RESEND_API_KEY:-}"
     printf 'SUBSCRIBE_API_TOKEN="%s"\n' "${SUBSCRIBE_API_TOKEN:-}"
+    printf 'ADMIN_PASSWORD_HASH="%s"\n' "${ADMIN_PASSWORD_HASH:-}"
+    printf 'ADMIN_SESSION_SECRET="%s"\n' "${ADMIN_SESSION_SECRET:-}"
     printf 'RESEND_WEBHOOK_SECRET="%s"\n\n' "${RESEND_WEBHOOK_SECRET:-}"
     printf '# --- Variables ---\n'
     printf 'SITE_NAME="%s"\n' "${SITE_NAME:-研电赛通知订阅}"
@@ -171,7 +180,38 @@ cmd_dev_vars() {
   } > "$DEV_VARS"
   ok "已写入 $DEV_VARS"
   note "该文件已被 .gitignore 忽略；线上配置用 ops.sh secrets"
-}
+)
+
+cmd_admin_secrets() (
+  case "${1:-}:$#" in
+    :0|--rotate:1) ;;
+    *) die "用法：bash scripts/ops.sh admin-secrets [--rotate]" ;;
+  esac
+  load_config
+  if [ "${1:-}" = "--rotate" ] || [ -z "$ADMIN_PASSWORD_HASH$ADMIN_SESSION_SECRET" ]; then
+    require_cmd openssl "安装 OpenSSL"
+    [ -t 1 ] || die "请在交互式终端运行，以便保存新口令"
+    local password hash secret staging
+    password="$(openssl rand -hex 32)"
+    hash="$(printf '%s' "$password" | openssl dgst -sha256 -r | cut -d ' ' -f 1)"
+    secret="$(openssl rand -hex 32)"
+    [[ "$hash" =~ ^[0-9a-f]{64}$ && "$secret" =~ ^[0-9a-f]{64}$ ]] || die "生成管理员密钥失败"
+
+    staging="$(mktemp "${CONFIG_FILE}.admin.XXXXXX")"
+    trap 'rm -f "$staging"' EXIT
+    {
+      sed '/^ADMIN_PASSWORD_HASH=/d; /^ADMIN_SESSION_SECRET=/d' "$CONFIG_FILE"
+      printf '\nADMIN_PASSWORD_HASH="%s"\nADMIN_SESSION_SECRET="%s"\n' "$hash" "$secret"
+    } > "$staging"
+    mv "$staging" "$CONFIG_FILE"
+    printf '管理员口令（请保存到密码管理器）：%s\n' "$password"
+    ok "管理员密钥已保存到 .env"
+  fi
+
+  bash "$SCRIPTS_DIR/cf-secrets.sh" --admin \
+    || die "管理员密钥上传未完成。修正错误后重跑 admin-secrets 可沿用已保存的密钥"
+  note "部署含管理员后台的 Worker 后，访问 /admin 登录"
+)
 
 cmd_secrets() {
   # 允许 `ops.sh secrets --dry-run`：第一个参数是选项时目标默认为 all
@@ -406,6 +446,12 @@ cmd_doctor() {
     printf '%s' "$cf_secrets" | grep -q "\"$k\"" && mark_ok "$k 已设置" \
       || mark_fail "$k 没设置：bash scripts/ops.sh cf-secrets"
   done
+  if [ -n "${ADMIN_PASSWORD_HASH:-}${ADMIN_SESSION_SECRET:-}" ]; then
+    for k in "${ADMIN_KEYS[@]}"; do
+      printf '%s' "$cf_secrets" | grep -q "\"$k\"" && mark_ok "$k 已设置" \
+        || mark_fail "$k 没设置：bash scripts/ops.sh admin-secrets"
+    done
+  fi
 
   step "GitHub"
   local gh_secrets=""
@@ -470,6 +516,7 @@ case "$CMD" in
   status)       cmd_status ;;
   config)       cmd_config "$@" ;;
   secrets)      cmd_secrets "$@" ;;
+  admin-secrets) cmd_admin_secrets "$@" ;;
   cf-secrets)   bash "$SCRIPTS_DIR/cf-secrets.sh" "$@" ;;
   gh-secrets)   bash "$SCRIPTS_DIR/gh-secrets.sh" "$@" ;;
   dev-vars)     cmd_dev_vars ;;

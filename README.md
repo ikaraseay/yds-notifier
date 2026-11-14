@@ -148,6 +148,8 @@ flowchart LR
 | `/calendar.ics` | GET | 个人日历，必须带 `?email=&token=` 签名，否则 401；可叠加 `&contest=` / `&audience=` |
 | `/api/notices` | POST | Python 同步通知元数据，Bearer 鉴权 |
 | `/api/stats` | GET | 退订原因与降频统计，Bearer 鉴权 |
+| `/admin` | GET | 管理员后台：运营概览、订阅管理、通知同步情况 |
+| `/api/admin/login` · `/api/admin/logout` · `/api/admin/subscribers/remove` | POST | 后台登录、退出、移出投递名单 |
 | `/api/webhooks/resend` | POST | Resend webhook（Svix 验签），清理退信 / 投诉地址 |
 | `/robots.txt` · `/llms.txt` | GET / HEAD | 爬虫规则与 AI 代理说明 |
 | `/favicon.svg` · `/favicon.ico` | GET / HEAD | 站点图标（内联 SVG） |
@@ -323,6 +325,18 @@ git push origin main
 
 ## 配置说明
 
+#### 启用管理员后台
+
+已创建 Worker 并完成 Cloudflare 登录后，在仓库根目录执行：
+
+```bash
+bash scripts/ops.sh admin-secrets
+```
+
+首次运行请保存终端显示的管理员口令。脚本将口令哈希和会话密钥保存到 `.env` 并批量同步到 Worker。部署包含后台的版本后，访问 `/admin` 登录。轮换时加 `--rotate`，已有会话会在新密钥生效后失效。详见 [Cloudflare 自动部署指南](docs/Cloudflare自动部署指南.md#一键设置管理员密钥)。
+
+在「订阅管理」中搜索邮箱，勾选确认后可将其移出投递名单。账号及订阅偏好会保留，订阅者可以重新登录恢复收信。「通知归档」显示最近同步的通知和时间。
+
 `.env` 是**唯一事实源**，优先级为：进程环境变量（CI / Cloudflare 注入）> `.env` > 内置默认值。
 `.env` 与 `cloudflare/.dev.vars` 均被忽略；`config/config.yaml` 描述业务规则（数据源、白名单、去重、主题前缀）。
 
@@ -497,6 +511,7 @@ yds-notifier/
 | 调整邮件样式 | `backend/mailer.py` 的 `build_html` |
 | 修改 Worker 界面 / 后端 | `frontend/` / `cloudflare/src/handlers/` |
 | 调整栏目 | 同步修改 `cloudflare/src/auth.ts` 的 `CATEGORIES` 与 `backend/recipients.py` 的 `CATEGORY_TO_KEY` |
+| `admin-secrets` | 生成并批量上传管理员密钥到 Cloudflare（加 `--rotate` 轮换） |
 | 更换站点域名 | 改 `.env` 的 `CUSTOM_DOMAIN`，跑 `ops.sh secrets` 与 `ops.sh deploy` |
 | 更换发件地址 | 改 `MAIL_FROM_ADDRESS` 并跑 `ops.sh secrets`；Resend 侧需先验证该域名 |
 

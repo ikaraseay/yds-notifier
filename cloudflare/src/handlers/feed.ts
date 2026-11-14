@@ -185,7 +185,7 @@ export function invalidateFeed(): void {
   feedCache = null;
 }
 
-async function loadFeed(env: Env): Promise<FeedData> {
+export async function loadFeed(env: Env): Promise<FeedData> {
   const now = Date.now();
   if (feedCache && now - feedCache.at < FEED_TTL_MS) return feedCache.data;
   try {

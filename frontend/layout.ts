@@ -13,9 +13,10 @@ export interface PageOpts {
   extra?: string;
   /** 纯 JS 片段，由本函数包上带 nonce 的 <script> */
   script?: string;
+  wide?: boolean;
 }
 
-export function page({ title, heading, body, extra = "", script = "" }: PageOpts, status = 200): Response {
+export function page({ title, heading, body, extra = "", script = "", wide = false }: PageOpts, status = 200): Response {
   const nonce = newNonce();
   const hasScript = Boolean(script);
   const safeHeading = esc(heading)
@@ -26,7 +27,7 @@ export function page({ title, heading, body, extra = "", script = "" }: PageOpts
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><meta name="robots" content="noindex">
 <style nonce="${nonce}">${CSS}</style></head><body>
-<div class="card">
+<div class="card${wide ? " card--wide" : ""}">
   <div class="mark"></div>
   <h1>${safeHeading}</h1>
   ${body}
@@ -60,8 +61,8 @@ export function jsonResp(data: unknown, status = 200, cookie?: string): Response
   return new Response(JSON.stringify(data), { status, headers });
 }
 
-export function redirect(location: string, cookie?: string): Response {
+export function redirect(location: string, cookie?: string, status = 302): Response {
   const headers: Record<string, string> = { Location: location, ...securityHeaders() };
   if (cookie) headers["Set-Cookie"] = cookie;
-  return new Response(null, { status: 302, headers });
+  return new Response(null, { status, headers });
 }

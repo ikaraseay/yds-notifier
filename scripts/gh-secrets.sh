@@ -35,6 +35,9 @@ done
 
 load_config
 if [ -n "$ONLY" ]; then
+  case "$ONLY" in
+    ADMIN_PASSWORD_HASH|ADMIN_SESSION_SECRET) die "管理员密钥只能上传到 Cloudflare" ;;
+  esac
   KEYS=("$ONLY")
 else
   KEYS=("${GH_KEYS[@]}")

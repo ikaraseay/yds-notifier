@@ -82,10 +82,7 @@ export async function handleList(req: Request, env: Env): Promise<Response> {
   });
 }
 
-/** GET /api/stats —— 退订原因与「改为低频」统计（管理接口）。 */
-export async function handleStats(req: Request, env: Env): Promise<Response> {
-  const cfg = getConfig(env);
-  if (!adminAuthed(req, cfg)) return jsonResp({ ok: false, message: "unauthorized" }, 401);
+export async function getUnsubscribeStats(env: Env): Promise<Record<string, unknown>> {
   let stats: Record<string, unknown> = { total: 0, lowFrequency: 0, reasons: {} };
   try {
     const raw = await env.SUBS.get("stats:unsub");
@@ -93,5 +90,13 @@ export async function handleStats(req: Request, env: Env): Promise<Response> {
   } catch {
     // 统计损坏时返回零值，不影响主流程
   }
+  return stats;
+}
+
+/** GET /api/stats —— 退订原因与「改为低频」统计（管理接口）。 */
+export async function handleStats(req: Request, env: Env): Promise<Response> {
+  const cfg = getConfig(env);
+  if (!adminAuthed(req, cfg)) return jsonResp({ ok: false, message: "unauthorized" }, 401);
+  const stats = await getUnsubscribeStats(env);
   return jsonResp({ ok: true, count: await getCount(env), ...stats });
 }

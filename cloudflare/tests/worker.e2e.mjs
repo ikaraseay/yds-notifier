@@ -1291,5 +1291,62 @@ const check = (name, cond, extra = "") => {
   }, "8.8.8.8");
   check("跨站提交登录被拒", csrf.status === 403, csrf.status);
 
+  console.log("\n[41] 管理后台");
+  const admin = (path, body, cookie, origin = "https://yds.workers.dev", ip, site = "same-origin") => call(path, {
+    method: "POST",
+    body: new URLSearchParams(body),
+    headers: { "Content-Type": "application/x-www-form-urlencoded", Origin: origin, Cookie: cookie || "", "Sec-Fetch-Site": site },
+  }, ip);
+  const adminList = "/admin?view=subscribers&q=CONSENT-SOURCE";
+  const removePath = "/api/admin/subscribers/remove";
+  const removeForm = { email: consentMail, q: "consent-source", confirm: "yes" };
+  const password = "admin-e2e-password";
+  check("缺少后台密钥时默认关闭", (await call("/admin")).status === 503);
+  env.ADMIN_PASSWORD_HASH = crypto.createHash("sha256").update(password).digest("hex");
+  env.ADMIN_SESSION_SECRET = "test-admin-session-secret-with-32-bytes";
+  r = await call(adminList, { headers: { Cookie: `yds_sid=${sid}`, Authorization: "Bearer admin-secret" } });
+  check("普通用户会话和机器令牌无法查看名单", r.text.includes('type="password"') && !r.text.includes(consentMail));
+  check("后台页面禁止缓存和索引", r.headers.get("cache-control").includes("no-store") && r.text.includes('content="noindex"'));
+  check("GET 不能移出订阅", (await call(removePath)).status === 405);
+  check("未登录不能移出订阅", (await admin(removePath, removeForm)).status === 401);
+  check("拒绝不同来源的登录请求", (await admin("/api/admin/login", { password }, "", "https://evil.example")).status === 403);
+  const attempts = [];
+  for (let i = 0; i < 6; i++) {
+    attempts.push((await admin("/api/admin/login", { password: "wrong" }, "", undefined, "8.8.8.9")).status);
+  }
+  check("错误口令返回 401，连续尝试触发限流", attempts.join(",") === "401,401,401,401,401,429");
+  check("拒绝跨站 Origin null 的登录请求", (await admin("/api/admin/login", { password }, "", "null", undefined, "cross-site")).status === 403);
+  r = await admin("/api/admin/login", { password }, "", "null");
+  const adminSetCookie = r.headers.get("set-cookie") || "";
+  const adminCookie = adminSetCookie.split(";")[0];
+  check("登录后跳转并设置独立的安全 Cookie", r.status === 303 && r.headers.get("location") === "/admin" &&
+    adminCookie.startsWith("__Host-yds_admin=") && /HttpOnly; Secure; SameSite=Strict/.test(adminSetCookie));
+  const adminGet = (path, cookie = adminCookie) => call(path, { headers: { Cookie: cookie } });
+  check("篡改签名不能进入后台", (await adminGet(adminList, adminCookie + "0")).text.includes('type="password"'));
+  const expired = Math.floor(Date.now() / 1000) - 1;
+  const expiredSig = crypto.createHmac("sha256", env.ADMIN_SESSION_SECRET)
+    .update(`admin:${env.ADMIN_PASSWORD_HASH}:${expired}`).digest("hex");
+  check("过期的有效签名不能进入后台", (await adminGet(adminList, `__Host-yds_admin=${expired}.${expiredSig}`)).text.includes('type="password"'));
+  check("后台显示运营概览与通知归档",
+    (await adminGet("/admin")).text.includes("退订与降频") &&
+    (await adminGet("/admin?view=archive")).text.includes("最近同步"));
+  r = await adminGet(adminList);
+  check("管理员可按邮箱搜索", r.text.includes(consentMail) && !r.text.includes("tag@qq.com"));
+  check("拒绝跨站移出", (await admin(removePath, removeForm, adminCookie, "https://evil.example")).status === 403);
+  check("移出前必须确认", (await admin(removePath, { email: consentMail }, adminCookie)).status === 400);
+  assert.ok(await env.SUBS.get(`sub:${consentMail}`));
+  r = await admin(removePath, removeForm, adminCookie);
+  const result = await adminGet(r.headers.get("location") || "/admin");
+  const delivery = await call("/api/list", { headers: { Authorization: "Bearer admin-secret" } });
+  check("移出后投递名单不含该邮箱并保留账号", r.status === 303 && result.text.includes("已从投递名单移出") &&
+    !JSON.parse(delivery.text).emails.includes(consentMail) && !!(await env.SUBS.get(`user:${consentMail}`)));
+  const countAfterRemoval = await env.SUBS.get("meta:count");
+  await admin(removePath, removeForm, adminCookie);
+  check("重复移出不会重复扣减订阅数", countAfterRemoval === await env.SUBS.get("meta:count"));
+  r = await admin("/api/admin/logout", {}, adminCookie);
+  check("退出登录清除管理员 Cookie", r.status === 303 && r.headers.get("set-cookie").includes("Max-Age=0"));
+  env.ADMIN_SESSION_SECRET += "-rotated";
+  check("轮换后台密钥让旧会话失效", (await adminGet(adminList)).text.includes('type="password"'));
+
   console.log(`\n结果：${pass} 项通过${process.exitCode ? "，存在失败" : "，全部通过"}`);
 })();

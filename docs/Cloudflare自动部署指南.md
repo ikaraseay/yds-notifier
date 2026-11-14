@@ -102,6 +102,22 @@ custom_domain = true
 | `SUBSCRIBE_API_TOKEN` | 另一个 `openssl rand -hex 32` | **必填**，与 GitHub 同名同值（旧名 `ADMIN_TOKEN` 仍兼容） |
 | `UNSUB_SECRET_PREVIOUS` | 旧签名密钥 | 可选，密钥轮换期使用 |
 | `RESEND_WEBHOOK_SECRET` | `whsec_...` | 可选，Resend Webhook 签名密钥；留空时 webhook 端点返回 503（fail-closed） |
+| `ADMIN_PASSWORD_HASH` | 管理员随机口令的 SHA-256 哈希 | 可选，与下项一起启用 `/admin` |
+| `ADMIN_SESSION_SECRET` | 独立随机签名密钥 | 可选，由 Worker 签发和校验管理员会话 |
+
+#### 一键设置管理员密钥
+
+在仓库根目录准备好 `.env`，并配置 Cloudflare API Token 或通过 `bash scripts/ops.sh login` 登录。目标 Worker 应已创建。运行：
+
+```bash
+bash scripts/ops.sh admin-secrets
+```
+
+首次运行会生成随机登录口令和会话签名密钥，将口令显示在当前终端，请立即保存到密码管理器。脚本只将口令哈希和会话密钥保存在 `.env`，并通过一次 Wrangler 批量上传写入 Cloudflare Worker 的运行时 Secrets。管理员密钥仅用于 Worker。
+
+- 上传失败时，修正 Wrangler 报错后重跑原命令，会沿用已保存的密钥。
+- 忘记口令或需要轮换时，运行 `bash scripts/ops.sh admin-secrets --rotate`，保存新口令。新密钥上线后，原管理员会话失效。
+- 本地验证时，运行 `bash scripts/ops.sh dev-vars` 同步到 `cloudflare/.dev.vars`，启动本地 Worker 后打开 `http://localhost:8787/admin`。线上需部署含管理员路由的版本，再访问站点的 `/admin`。
 
 ### 3.2 Settings → Variables and Secrets → **Variables**（明文）
 

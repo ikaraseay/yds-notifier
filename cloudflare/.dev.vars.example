@@ -18,6 +18,9 @@ UNSUB_SECRET_PREVIOUS=""
 RESEND_API_KEY="re_xxxxxxxxxxxxxxxxxxxxxxxx"
 SUBSCRIBE_API_TOKEN="replace-with-another-32-byte-random-hex"
 RESEND_WEBHOOK_SECRET=""
+# 可选：两项都配置后启用 /admin。运行 ops.sh dev-vars 可从 .env 同步。
+ADMIN_PASSWORD_HASH=""
+ADMIN_SESSION_SECRET=""
 
 # --- Variables ---
 SITE_NAME="研电赛通知订阅"
