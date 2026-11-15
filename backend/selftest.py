@@ -2,7 +2,7 @@
 
     python -m backend.selftest
 
-不发网络请求、不需要真实密钥。修改 backend/unsub.py 或 cloudflare/src/security.ts
+不发网络请求、不需要真实密钥。修改 backend/notifications/unsub.py 或 cloudflare/src/platform/security.ts
 后请分别运行本自测与 `cd cloudflare && npm test`，防止跨端签名再次漂移。
 **任何一项 FAIL 都会让进程返回非零**，CI 会因此变红。
 """
@@ -20,19 +20,20 @@ import tempfile
 import time
 from datetime import date, timedelta
 from pathlib import Path
+from unittest.mock import patch
 
-from .ai.analyzer import analyze_notices
-from .ai.cache import AiCache
+from .yds.ai.analyzer import analyze_notices
+from .yds.ai.cache import AiCache
 from .ai.client import AiClient, AiClientError, AiConfig
-from .ai.prompts import load_examples, load_prompt, load_schema, render, user_payload
-from .ai.schema import CATEGORIES, input_hash, parse_evidence_date, validate_response
+from .yds.ai.prompts import load_examples, load_prompt, load_schema, render, user_payload
+from .yds.ai.schema import CATEGORIES, input_hash, parse_evidence_date, validate_response
 from .config import derive_base_url, derive_internal_base, settings
-from . import fetch as fetch_mod
-from .robots import parse as parse_robots
-from .mailer import build_html, build_subject, build_text, sort_notices
-from .lock import RunLock
-from .models import Attachment, Notice, by_recency
-from .personas import (
+from .crawl import fetch as fetch_mod
+from .crawl.robots import parse as parse_robots
+from .yds.mailer import build_html, build_subject, build_text, sort_notices
+from .store.lock import RunLock
+from .yds.models import Attachment, Notice, by_recency
+from .yds.personas import (
     AUDIENCES,
     CONTEST_IDS,
     CONTESTS,
@@ -41,20 +42,22 @@ from .personas import (
     infer_contest,
     infer_stage,
 )
-from .publish import apply_analysis, build_payload, extract_deadline, payload_fingerprint
-from .recipients import (
+from .yds.publish import apply_analysis, build_payload, extract_deadline, payload_fingerprint
+from .yds.recipients import (
     Recipient,
     _parse_audiences,
     _parse_contests,
     _valid,
     watched_contests,
 )
-from .schedule import ContestSchedule, ReminderLog, ScheduleStore, parse_schedule
-from .sources import CpipcZonesSource, build_sources
-from .state import State, load_pending, pending_notices, save_pending
+from .notifications.serverchan import send as send_serverchan
+from .yds.schedule import ContestSchedule, ReminderLog, ScheduleStore, parse_schedule
+from .skills import load_skill
+from .yds.sources import CpipcZonesSource, build_sources
+from .yds.state import State, load_pending, pending_notices, save_pending
 from .store import R2StateStore, StateConflict, StateUnavailable
 from .store.r2 import _RestClient
-from .unsub import (
+from .notifications.unsub import (
     build_calendar_url,
     build_list_unsubscribe_headers,
     build_unsubscribe_url,
@@ -91,11 +94,11 @@ def main() -> int:
     check("UNSUB_TTL_DAYS >= 1", settings.unsub_ttl_days >= 1)
 
     print("\n[1a] 发件人显示名带 [非官方]")
-    from .senders import unofficial_sender_name  # 延迟导入：避免 selftest 顶部拉进网络依赖
+    from .notifications.senders import unofficial_sender_name  # 延迟导入：避免 selftest 顶部拉进网络依赖
 
     check("补上后缀", unofficial_sender_name("研电赛通知") == "研电赛通知 [非官方]")
     check("幂等（不会叠加）", unofficial_sender_name("研电赛通知 [非官方]") == "研电赛通知 [非官方]")
-    check("空名有兜底", unofficial_sender_name("  ") == "研电赛通知 [非官方]")
+    check("空名有兜底", unofficial_sender_name("  ") == "MeoNotifier [非官方]")
 
     print("\n[1b] 域名派生（自定义域名 / workers.dev）")
     check(
@@ -198,7 +201,7 @@ def main() -> int:
         check("损坏文件 fail-closed 不重建基线", broken.corrupt and not broken.is_first_run)
 
     # 详情抽检按「上次复核时间」轮转：避免每天重复抽同一批最近通知
-    from .main import pick_detail_checks
+    from .yds.main import pick_detail_checks
     with tempfile.TemporaryDirectory() as tmp:
         st3 = State(str(Path(tmp) / "seen.json"))
         today = date(2026, 11, 7)
@@ -229,7 +232,7 @@ def main() -> int:
     check("暂停用户进 daily 池补发", paused.digest_key == "daily")
     # 每天两轮（10:00 / 20:00）：只有上午那轮发摘要，晚上那轮不发
     from datetime import datetime as _dt
-    from .dispatch import in_digest_window
+    from .yds.dispatch import in_digest_window
     check("10:00 在摘要窗口", in_digest_window(_dt(2026, 11, 7, 10, 0), 10))
     check("上午轮延迟到 17:30 仍在窗口", in_digest_window(_dt(2026, 11, 7, 17, 30), 10))
     check("延迟到 18:00 超出窗口", not in_digest_window(_dt(2026, 11, 7, 18, 0), 10))
@@ -326,7 +329,7 @@ def main() -> int:
     check("无日期通知垫底", by_recency([nod, new_low])[0] is new_low)
     # 静态守卫：超龄条目也要标已读，否则每轮重复判「新增后跳过」，
     # 将来放宽 push_max_age_days 时还会瞬间涌入邮件。
-    src_main = (Path(__file__).with_name("main.py")).read_text(encoding="utf-8")
+    src_main = (Path(__file__).parent / "yds/main.py").read_text(encoding="utf-8")
     check("超龄条目标已读的代码在位", "state.mark(stale_items)" in src_main)
     check("无新公告分支会保存超龄标记", "stale_marked" in src_main)
 
@@ -369,7 +372,7 @@ def main() -> int:
     fetch_mod.set_respect_robots("enforce")
 
     print("\n[9f] 赛事状态 AI 判定与低频扫描")
-    from .contests import (
+    from .yds.contests import (
         collect_evidence, classify, load_state, plan, save_state,
     )
 
@@ -470,7 +473,7 @@ def main() -> int:
         check("缺少官方赛程时强制进行中", v2["无赛程赛事"]["ended"] is False)
         check("缺赛程理由写明 fail-open", "官方赛程缺少" in v2["无赛程赛事"]["reason"])
 
-    from .ai.prompts import load_prompt
+    from .yds.ai.prompts import load_prompt
     spec = load_prompt("contest_status")
     check("提示词把收尾公告定义为结束证据", "收尾信号" in spec.system)
     check("提示词要求 allPast 判已结束", "allPast" in spec.system and "ended: true" in spec.system)
@@ -478,10 +481,17 @@ def main() -> int:
     # 配置联动守卫：复扫间隔超过推送窗口时，复扫才发现的通知只会归档、不推送。
     # 2026-11-07 起三个周期统一为 14 天（判定复核 / 复扫 / 推送窗口）。
     import yaml
-    from .contests import DEFAULT_CHECK_DAYS, DEFAULT_ENDED_SCAN_DAYS
-    cfg_yaml = yaml.safe_load(
-        (Path(__file__).resolve().parent.parent / "config/config.yaml").read_text(encoding="utf-8")
-    )
+    from .yds.contests import DEFAULT_CHECK_DAYS, DEFAULT_ENDED_SCAN_DAYS
+    skill = load_skill("yds")
+    cfg_yaml = skill.load_config()
+    check("研电赛 Skill 保留原通知状态路径", cfg_yaml["state_file"] == "data/seen.json")
+    check("旧 --config 路径仍可加载内置配置", skill.load_config(
+        str(skill.directory.parent.parent / "config/config.yaml")
+    ) == cfg_yaml)
+    with tempfile.TemporaryDirectory() as tmp:
+        override = Path(tmp) / "custom.yaml"
+        override.write_text("sources: []\n", encoding="utf-8")
+        check("显式业务配置仍可覆盖 Skill", skill.load_config(str(override)) == {"sources": []})
     check("判定复核周期默认 14 天", DEFAULT_CHECK_DAYS == 14, str(DEFAULT_CHECK_DAYS))
     check("复扫间隔默认 14 天", DEFAULT_ENDED_SCAN_DAYS == 14, str(DEFAULT_ENDED_SCAN_DAYS))
     check("配置与代码默认值一致",
@@ -550,9 +560,9 @@ def main() -> int:
         check("旧轮询状态被安全丢弃", load_state(str(Path(tmp, "zones.json")))["contests"] == {})
 
     print("\n[9g] 只读模式 / 抓取合规 / 事务边界 / 默认值")
-    src_main = (Path(__file__).with_name("main.py")).read_text(encoding="utf-8")
-    src_body = (Path(__file__).with_name("ai") / "body.py").read_text(encoding="utf-8")
-    src_dispatch = (Path(__file__).with_name("dispatch.py")).read_text(encoding="utf-8")
+    src_main = (Path(__file__).parent / "yds/main.py").read_text(encoding="utf-8")
+    src_body = (Path(__file__).parent / "yds/ai/body.py").read_text(encoding="utf-8")
+    src_dispatch = (Path(__file__).parent / "yds/dispatch.py").read_text(encoding="utf-8")
     check("只读模式统一判定", "read_only = bool(args.check or args.preview or args.dry_run)" in src_main)
     check("只读模式会还原本地状态",
           "_snapshot_local_state" in src_main and "_restore_local_state" in src_main)
@@ -565,8 +575,8 @@ def main() -> int:
     check("推送窗口默认值对齐 config", 'cfg.get("push_max_age_days", 14)' in src_main)
     check("追赶阈值默认值对齐 config", 'cfg.get("catchup_threshold", 10)' in src_main)
 
-    from . import main as main_mod
-    from .schedule import ScheduleStore
+    from .yds import main as main_mod
+    from .yds.schedule import ScheduleStore
     with tempfile.TemporaryDirectory() as tmp:
         origin = main_mod.DATA_DIR
         main_mod.DATA_DIR = tmp
@@ -586,7 +596,7 @@ def main() -> int:
     print("\n[10] 归档同步不会被「无新公告」提前返回跳过")
     # 回归守卫：同步曾写在 `if not fresh: return 0` 之后，导致没有新公告时
     # 归档/RSS/日历永远为空。这里只做静态顺序校验，不联网、不发信。
-    src = (Path(__file__).with_name("main.py")).read_text(encoding="utf-8")
+    src = (Path(__file__).parent / "yds/main.py").read_text(encoding="utf-8")
     sync_at = src.find("publish_notices(payload)")
     early_at = src.find("if not merged and not args.preview")
     check("主流程中存在归档同步调用", sync_at > 0)
@@ -847,17 +857,15 @@ def main() -> int:
 
     print("\n[18] 后台角色 / 赛事偏好与赛事专区")
 
-    # 赛事清单已收敛到 config/contests.json：这里验证「两端确实都读它」，
+    # 赛事清单已收敛到 skills/yds/contests.json：这里验证「两端确实都读它」，
     # 而不是像旧版那样去解析 TypeScript 源码文本比对。
-    contract = json.loads(
-        (Path(__file__).resolve().parent.parent / "config/contests.json").read_text(encoding="utf-8")
-    )
+    contract = json.loads(skill.contests.read_text(encoding="utf-8"))
     names = [c["name"] for c in contract["contests"]]
     check("赛事契约与 Python 常量一致", tuple(names) == tuple(CONTESTS),
           f"{len(names)} vs {len(CONTESTS)}")
     check("赛事契约无重复", len(set(names)) == len(names))
-    auth_ts = (Path(__file__).resolve().parent.parent / "cloudflare/src/auth.ts").read_text(encoding="utf-8")
-    check("Worker 从契约文件读取赛事", "config/contests.json" in auth_ts,
+    auth_ts = (Path(__file__).resolve().parent.parent / "cloudflare/src/accounts/auth.ts").read_text(encoding="utf-8")
+    check("Worker 从契约文件读取赛事", "skills/yds/contests.json" in auth_ts,
           "auth.ts 应 import 契约，而不是自带一份清单")
     check("赛事契约的专区 id 与 Python 映射一致",
           {c["name"]: c["zoneId"] for c in contract["contests"]} == dict(CONTEST_IDS))
@@ -1079,6 +1087,24 @@ def main() -> int:
         check("桶被清空应中止", False, "没有抛 StateUnavailable")
     except StateUnavailable:
         check("桶被清空时中止（不拿陈旧本地状态当基线）", True)
+
+    for key, endpoint in (
+        ("SCTexample", "https://sctapi.ftqq.com"),
+        ("sctp123texample", "https://123.push.ft07.com/send"),
+    ):
+        with patch("backend.notifications.serverchan.urlopen", return_value=io.BytesIO(b'{"code":0}')) as post:
+            send_serverchan(key, "Test", "Body")
+            post.assert_called_once_with(
+                f"{endpoint}/{key}.send", data=b"title=Test&desp=Body", timeout=10,
+            )
+        check(f"Server 酱路由 {endpoint}", True)
+    with patch("backend.notifications.serverchan.urlopen", return_value=io.BytesIO(b'{"code":1}')):
+        try:
+            send_serverchan("SCTexample", "Test", "Body")
+        except ValueError:
+            check("Server 酱业务失败", True)
+        else:
+            check("Server 酱业务失败", False)
 
     print(f"\n结果：{PASS} 项通过，{FAIL} 项失败")
     return 1 if FAIL else 0

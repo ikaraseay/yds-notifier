@@ -9,7 +9,7 @@
 `WORKERS_DEV_URL`），`PUBLIC_BASE_URL`、`UNSUB_URL`、`SUBSCRIBE_API_URL`
 全部自动派生；旧部署里显式填过的同名变量仍然优先生效，保证平滑升级。
 
-`config/config.yaml` 只描述业务规则（数据源、去重策略），不含任何环境信息。
+`skills/yds/config.yaml` 只描述业务规则（数据源、去重策略），不含任何环境信息。
 本模块是 Python 端读取环境配置的唯一出口。
 """
 
@@ -131,7 +131,7 @@ class Settings:
     r2_prefix: str
 
     # AI 分析（OpenAI 兼容接口，默认 DeepSeek）
-    # 提示词版本不在这里：由 backend/prompts/manifest.yaml 的 active 决定，避免双源
+    # 提示词版本不在这里：由 skills/yds/prompts/manifest.yaml 的 active 决定，避免双源
     ai_enabled: bool
     ai_api_key: str
     ai_base_url: str
@@ -153,7 +153,7 @@ class Settings:
         internal = derive_internal_base(dev_url, base)
 
         return cls(
-            site_name=_s("SITE_NAME", "研电赛通知订阅"),
+            site_name=_s("SITE_NAME", "MeoNotifier"),
             custom_domain=custom,
             workers_dev_url=dev_url,
             public_base_url=base,
@@ -161,7 +161,7 @@ class Settings:
             repo_url=_s("REPO_URL"),
             mail_provider=_s("MAIL_PROVIDER", "resend").lower(),
             mail_from_address=from_addr,
-            mail_from_name=_s("MAIL_FROM_NAME", "研电赛通知"),
+            mail_from_name=_s("MAIL_FROM_NAME", "MeoNotifier"),
             mail_to=_s("MAIL_TO"),
             reply_to=_s("REPLY_TO"),
             resend_api_key=_s("RESEND_API_KEY"),

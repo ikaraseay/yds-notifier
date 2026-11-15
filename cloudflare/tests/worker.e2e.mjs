@@ -274,6 +274,26 @@ const check = (name, cond, extra = "") => {
   r = await call("/dashboard", { headers: { Cookie: `yds_sid=${sid}` } });
   check("有效会话 200", r.status === 200);
 
+  check("未配置时隐藏微信服务号入口", !r.text.includes('id="wechat-heading"'));
+  env.WECHAT_SERVICE_NAME = "研电赛 <通知>";
+  env.WECHAT_SERVICE_QR_URL = "https://mp.weixin.qq.com/cgi-bin/showqrcode?ticket=test";
+  for (const [path, headers] of [
+    ["/", {}],
+    ["/dashboard", { Cookie: `yds_sid=${sid}` }],
+  ]) {
+    r = await call(path, { headers });
+    check(`${path} 展示服务号和官方二维码`,
+      r.text.includes("研电赛 &lt;通知&gt;") &&
+      r.text.includes('src="https://mp.weixin.qq.com/cgi-bin/showqrcode?ticket=test"') &&
+      r.headers.get("content-security-policy").includes("https://mp.weixin.qq.com"));
+  }
+  env.WECHAT_SERVICE_QR_URL = "https://example.com/qr";
+  r = await call("/");
+  check("第三方二维码回退到按名称搜索",
+    r.text.includes("研电赛 &lt;通知&gt;") && !r.text.includes("https://example.com/qr"));
+  delete env.WECHAT_SERVICE_NAME;
+  delete env.WECHAT_SERVICE_QR_URL;
+
   console.log("\n[8] 保存栏目偏好");
   r = await call("/api/prefs", {
     method: "POST",

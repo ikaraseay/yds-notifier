@@ -23,11 +23,17 @@ ADMIN_PASSWORD_HASH=""
 ADMIN_SESSION_SECRET=""
 
 # --- Variables ---
-SITE_NAME="研电赛通知订阅"
+SITE_NAME="MeoNotifier"
 MAIL_FROM_ADDRESS="notice@your-domain.com"
-MAIL_FROM_NAME="研电赛通知"
+MAIL_FROM_NAME="MeoNotifier"
 MAIL_TO="you@qq.com"
 UNSUB_TTL_DAYS="180"
 MAX_PER_IP_HOUR="10"
 MAX_CONFIRM_PER_DAY="200"
 LIST_RATE_PER_HOUR="60"
+
+# --- 微信服务号关注入口 ---
+WECHAT_SERVICE_NAME=""
+WECHAT_SERVICE_QR_URL=""
+
+GROUP_RUNNER_TOKEN=""

@@ -42,6 +42,25 @@ class AiConfig:
         return bool(self.enabled and self.api_key and self.base_url and self.model)
 
 
+def ai_config_from_settings() -> AiConfig:
+    """Build the shared AI client options from the runtime settings."""
+    from ..config import settings
+
+    return AiConfig(
+        enabled=settings.ai_enabled,
+        api_key=settings.ai_api_key,
+        base_url=settings.ai_base_url,
+        model=settings.ai_model,
+        thinking=settings.ai_thinking,
+        temperature=settings.ai_temperature,
+        max_tokens=settings.ai_max_tokens,
+        timeout=settings.ai_timeout,
+        batch_size=settings.ai_batch_size,
+        max_body_chars=settings.ai_max_body_chars,
+        prompt_version="",  # Each caller selects its prompt version.
+    )
+
+
 class AiClient:
     """薄封装：一次调用返回原始 content 字符串。"""
 

@@ -1,46 +1,36 @@
-/**
- * 研电赛通知订阅中心 —— 入口 / 路由层
- *
- * 目录约定：
- *   src/ui/         界面层：样式、脚本、HTML 骨架、具体页面
- *   src/handlers/   后端逻辑层：登录、控制台、退订、名单、归档、webhook
- *   src/env.ts      运行时配置（Cloudflare Variables & Secrets）
- *   src/security.ts 签名、CSRF、CSP、输入校验
- *   src/rate.ts     限流 Durable Object
- *   src/mailer.ts   出站邮件
- *
- * 本文件只做 method 白名单 + 路由分发 + 统一错误处理，不含业务逻辑。
- * Durable Object class 必须从入口模块导出，Wrangler 才能找到它。
- */
+/** MeoNotifier Worker 的路由入口和 Durable Object 导出。 */
 
-import { clearSessionCookie, getSession, getUser, readSessionToken } from "./auth";
-import { getConfig, type Env } from "./env";
-import { handleAdmin, handleAdminLogin, handleAdminLogout, handleAdminRemove } from "./handlers/admin";
-import { getCount, handleCount, handleList, handleStats, health } from "./handlers/api";
-import { handleDeleteAccount, handleLogout, handlePrefs } from "./handlers/dashboard";
+import { clearSessionCookie, getSession, getUser, readSessionToken } from "./accounts/auth";
+import { getConfig, type Env } from "./platform/env";
+import { handleAdmin, handleAdminLogin, handleAdminLogout, handleAdminRemove } from "./admin/handler";
+import { getCount, handleCount, handleList, handleStats, health } from "./accounts/api";
+import { handleDeleteAccount, handleLogout, handlePrefs } from "./accounts/dashboard";
 import {
   handleArchive,
   handleCalendar,
   handleFeed,
   handleNoticesPost,
   personalCalendarUrl,
-} from "./handlers/feed";
+} from "./notices/handler";
 import {
   handleConfirm,
   handleConfirmResend,
   handleLogin,
   handleMagicVerify,
-} from "./handlers/login";
-import { handleUnsubscribe } from "./handlers/unsubscribe";
-import { handleResendWebhook } from "./handlers/webhook";
-import { methodNotAllowed } from "./security";
-import { llmsResponse, robotsResponse, ISSUES_URL } from "./static";
-import { faviconResponse } from "../../frontend/icons";
-import { redirect } from "../../frontend/layout";
-import { dashboardPage, loginPage, messagePage } from "../../frontend/pages";
+} from "./accounts/login";
+import { handleUnsubscribe } from "./accounts/unsubscribe";
+import { handleResendWebhook } from "./mail/webhook";
+import { handleGroupAdmin } from "./groups/admin";
+import { handleGroups } from "./groups/handler";
+import { handleGroupRunner } from "./groups/runner";
+import { methodNotAllowed } from "./platform/security";
+import { llmsResponse, robotsResponse, ISSUES_URL } from "./platform/static";
+import { faviconResponse } from "./ui/icons";
+import { redirect } from "./platform/http";
+import { dashboardPage, loginPage, messagePage } from "./ui/pages";
 
-export { RateLimiter } from "./rate";
-export type { Env } from "./env";
+export { RateLimiter } from "./platform/rate";
+export type { Env } from "./platform/env";
 
 export default {
   async fetch(req: Request, env: Env): Promise<Response> {
@@ -87,6 +77,12 @@ export default {
       }
 
       // ---- 管理后台及机器接口 ------------------------------------------------------
+      if (p === "/groups" || p === "/admin/groups" || p === "/api/group-runner") {
+        if (m !== "GET" && m !== "POST") return methodNotAllowed("GET, POST");
+        if (p === "/groups") return await handleGroups(req, env);
+        if (p === "/admin/groups") return await handleGroupAdmin(req, env);
+        return await handleGroupRunner(req, env);
+      }
       if (p === "/admin") {
         if (m !== "GET") return methodNotAllowed("GET");
         return await handleAdmin(req, env, url);
@@ -110,15 +106,20 @@ export default {
         return handleResendWebhook(req, env);
       }
 
+      const wechat = {
+        name: env.WECHAT_SERVICE_NAME?.trim() || "",
+        qrUrl: env.WECHAT_SERVICE_QR_URL?.trim() || "",
+      };
+
       // 首页：已登录直接进控制台，未登录看登录页
       if (p === "/") {
         if (m !== "GET") return methodNotAllowed("GET");
         const email = await getSession(env.SUBS, readSessionToken(req));
         if (email) {
           const user = await getUser(env.SUBS, email);
-          if (user) return dashboardPage(user, await personalCalendarUrl(env, user.email));
+          if (user) return dashboardPage(user, await personalCalendarUrl(env, user.email), wechat);
         }
-        return loginPage(cfg.siteName, await getCount(env), url.searchParams.get("deleted") === "1");
+        return loginPage(cfg.siteName, await getCount(env), url.searchParams.get("deleted") === "1", wechat);
       }
 
       if (p === "/api/login") {
@@ -147,7 +148,7 @@ export default {
         if (!email) return redirect("/");
         const user = await getUser(env.SUBS, email);
         if (!user) return redirect("/", clearSessionCookie());
-        return dashboardPage(user, await personalCalendarUrl(env, user.email));
+        return dashboardPage(user, await personalCalendarUrl(env, user.email), wechat);
       }
 
       if (p === "/api/prefs") {

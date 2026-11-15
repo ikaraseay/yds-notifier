@@ -1,6 +1,6 @@
 <a id="readme-top"></a>
 
-# 研电赛通知订阅器
+# MeoNotifier
 
 [![通知推送][notify-shield]][notify-url]
 [![Worker 校验][ci-shield]][ci-url]
@@ -148,6 +148,8 @@ flowchart LR
 | `/calendar.ics` | GET | 个人日历，必须带 `?email=&token=` 签名，否则 401；可叠加 `&contest=` / `&audience=` |
 | `/api/notices` | POST | Python 同步通知元数据，Bearer 鉴权 |
 | `/api/stats` | GET | 退订原因与降频统计，Bearer 鉴权 |
+| `/groups` | GET / POST | 我的通知组、公开目录、订阅管理 |
+| `/admin/groups` | GET / POST | 授权创建、审核公开、下架通知组 |
 | `/admin` | GET | 管理员后台：运营概览、订阅管理、通知同步情况 |
 | `/api/admin/login` · `/api/admin/logout` · `/api/admin/subscribers/remove` | POST | 后台登录、退出、移出投递名单 |
 | `/api/webhooks/resend` | POST | Resend webhook（Svix 验签），清理退信 / 投诉地址 |
@@ -176,7 +178,7 @@ AI 判为 `critical` 的通知走紧急快报立即送达，低价值动态在�
 
 **归档与日历**：`/archive` 提供列表与月历视图，可按赛事 / 角色筛选，节点标题链回原文；
 RSS 与归档页无需登录。个人日历只认签名链接，按该用户的角色与关注赛事过滤事件；
-官方赛程表写入日历，并对 `config/config.yaml` 中 `schedule.include` 指定的赛事在 T-30 / T-7 / T-3 / T-1 发提醒。
+官方赛程表写入日历，并对 `skills/yds/config.yaml` 中 `schedule.include` 指定的赛事在 T-30 / T-7 / T-3 / T-1 发提醒。
 
 **名单卫生**：Resend webhook 验签后自动移除硬退信与投诉地址并写入抑制标记；
 `/api/stats` 汇总退订原因。发信失败不写已读状态，下一轮整批重试；
@@ -232,6 +234,22 @@ cd ..
 ```
 
 只读命令会使用 R2 的真实状态做判定，并在退出时还原本地 `data/*.json`。
+
+### Server 酱推送
+
+在本地 `.env` 中设置 `SERVERCHAN_SENDKEY`，支持 Turbo 和 Server 酱³。GitHub Actions 定时推送使用同名仓库 Secret。正常运行时，每轮把新通知、更新和日程提醒合成一条推送，包含标题与原文链接。推送失败会写入日志，邮件状态仍按邮件投递结果更新。
+
+发送一条测试消息：
+
+```bash
+.venv/bin/python -m backend.serverchan
+```
+
+### 项目微信服务号
+
+在 Cloudflare Worker 的运行时变量中设置 `WECHAT_SERVICE_NAME` 为服务号名称。可选设置 `WECHAT_SERVICE_QR_URL` 为微信官方二维码图片地址（支持 `https://mp.weixin.qq.com` 和 `https://mmbiz.qpic.cn`）。本地调试在 `cloudflare/.dev.vars` 中配置。
+
+首页和订阅控制台会显示关注入口。自动通知需要另行接入公众号授权和获准使用的消息模板。
 
 ### 测试与构建
 
@@ -309,6 +327,33 @@ GitHub 侧需要 `gh auth login --web --scopes "repo,workflow"`。
 完整的环境信息清单见 [Cloudflare 自动部署指南](docs/Cloudflare自动部署指南.md) 与 [.env.example](.env.example)。
 退订链路与签名契约见 [退订服务部署指南](docs/退订服务部署指南.md)。
 
+#### 启用管理员后台
+
+已创建 Worker 并完成 Cloudflare 登录后，在仓库根目录执行：
+
+```bash
+bash scripts/ops.sh admin-secrets
+```
+
+首次运行请保存终端显示的管理员口令。脚本将口令哈希和会话密钥保存到 `.env` 并批量同步到 Worker。部署包含后台的版本后，访问 `/admin` 登录。轮换时加 `--rotate`，已有会话会在新密钥生效后失效。详见 [Cloudflare 自动部署指南](docs/Cloudflare自动部署指南.md#一键设置管理员密钥)。
+
+在「订阅管理」中搜索邮箱，勾选确认后可将其移出投递名单。账号及订阅偏好会保留，订阅者可以重新登录恢复收信。「通知归档」显示最近同步的通知和时间。
+
+#### 启用 MeoNotifier 通知组
+
+通知组使用独立的 D1 数据库。运行下列命令创建数据库，然后将输出的数据库 UUID 设为根目录 `.env` 和 Workers Builds 构建变量中的 `D1_GROUPS_ID`。
+
+```bash
+cd cloudflare
+npx wrangler d1 create meonotifier-groups
+npm run sync-config
+npx wrangler d1 migrations apply GROUPS --remote
+```
+
+生成独立的随机 `GROUP_RUNNER_TOKEN`，将同一个值写入 Worker 的运行时 Secret 与 GitHub Actions Secret。可从根目录 `.env` 通过 `bash scripts/ops.sh secrets --only GROUP_RUNNER_TOKEN` 同步。现有部署若覆盖了 `SITE_NAME` 或 `MAIL_FROM_NAME`，需要将 Worker 和 Actions 对应值改为 `MeoNotifier`。通知组邮件使用 Worker 的 Resend 配置。部署 Worker 后，在 `/admin/groups` 向已注册邮箱授予创建权限，通过 `/groups` 创建、试抓和订阅通知组。
+
+`notify.yml` 在正常运行时检查通知组。要提前处理试抓和审核复检，可手动运行工作流的 `normal` 模式。首次抓取仅建立基线。公开组须完成所有来源的复检并由管理员审核。启用 AI 配置可生成逐网址提示词、筛选变更并为公开组提出 Skill 候选版本。未配置 AI 时，试抓使用通用提示词，检测到正文变更即通知。为了保留已部署资源的标识，Worker 和原仓库名称仍用于运维配置。
+
 ### 4. 推送与验证
 
 ```bash
@@ -325,20 +370,8 @@ git push origin main
 
 ## 配置说明
 
-#### 启用管理员后台
-
-已创建 Worker 并完成 Cloudflare 登录后，在仓库根目录执行：
-
-```bash
-bash scripts/ops.sh admin-secrets
-```
-
-首次运行请保存终端显示的管理员口令。脚本将口令哈希和会话密钥保存到 `.env` 并批量同步到 Worker。部署包含后台的版本后，访问 `/admin` 登录。轮换时加 `--rotate`，已有会话会在新密钥生效后失效。详见 [Cloudflare 自动部署指南](docs/Cloudflare自动部署指南.md#一键设置管理员密钥)。
-
-在「订阅管理」中搜索邮箱，勾选确认后可将其移出投递名单。账号及订阅偏好会保留，订阅者可以重新登录恢复收信。「通知归档」显示最近同步的通知和时间。
-
 `.env` 是**唯一事实源**，优先级为：进程环境变量（CI / Cloudflare 注入）> `.env` > 内置默认值。
-`.env` 与 `cloudflare/.dev.vars` 均被忽略；`config/config.yaml` 描述业务规则（数据源、白名单、去重、主题前缀）。
+`.env` 与 `cloudflare/.dev.vars` 均被忽略；`skills/yds/config.yaml` 描述业务规则（数据源、白名单、去重、主题前缀）。
 
 | 派生项 | 规则 |
 |---|---|
@@ -352,12 +385,22 @@ bash scripts/ops.sh admin-secrets
 - 发件域名独立于站点域名；`MAIL_FROM_ADDRESS` 只需属于 Resend 已验证域名。
 - 显示名固定带 `[非官方]`：`MAIL_FROM_NAME` 只写基础名，Worker 的 `unofficialSenderName()`
   与 Python 的 `unofficial_sender_name()` 补上后缀，漏配变量也不会丢。
-- 页脚统一：「非官方声明 + 项目地址 + 错误报告」集中在 `cloudflare/src/static.ts`。
-- 提示词在 `backend/prompts/`，版本由 `backend/prompts/manifest.yaml` 的 `active` 决定：
+- 页脚统一：「非官方声明 + 项目地址 + 错误报告」集中在 `cloudflare/src/platform/static.ts`。
+- 提示词在 `skills/yds/prompts/`，版本由 `skills/yds/prompts/manifest.yaml` 的 `active` 决定：
   `notices: v2`（分类 / 摘要 / 紧急度 / 赛事名 / 阶段 / 面向人群 / 行动建议 / 事件日期）、
   `contest_status: v1`（赛事是否结束）、`digest: v1`（预留，不参与运行时）。
 
-### 业务规则（config/config.yaml）关键值
+### 单独运行研电赛 Skill
+
+`skills/yds/` 包含 Skill 清单、来源与赛程规则、赛事与角色契约，以及版本化 AI 提示词。通知工作流显式加载 `yds`。默认命令仍加载研电赛，`--config FILE` 可覆盖业务配置。
+
+```bash
+python -m backend --skill yds --check
+```
+
+研电赛继续使用当前订阅与去重数据。公开通知组的 Skill 仍由通知组任务独立读取，不参与研电赛的执行。
+
+### 业务规则（skills/yds/config.yaml）关键值
 
 | 键 | 值 | 作用 |
 |---|---|---|
@@ -437,29 +480,25 @@ R2 读不到（网络 / 权限 / 桶名错）或状态对象全丢时直接中�
 
 ```
 yds-notifier/
-├── .env.example · .env          # 配置模板 / 本地配置（后者已忽略）
-├── config/
-│   ├── config.yaml              # 业务规则：数据源 / 去重 / 主题前缀
-│   └── contests.json            # 跨端赛事契约：20 项赛事 + 专区 id
-├── backend/                     # Python：抓取 / 分析 / 发信 / 状态
-│   ├── main.py · sources.py · contests.py · state.py · store/
-│   ├── ai/                      # 分析客户端、schema、缓存、编排
-│   └── prompts/                 # manifest.yaml + notices / contest_status / digest / schemas
-├── frontend/                    # Worker 页面渲染层（结构与样式分离）
-│   ├── layout.ts · pages.ts · styles.ts · footer.ts · icons.ts
-│   └── archive/                 # 归档页：列表 / 日历 / 外壳
-├── cloudflare/                  # Worker 运行时与部署层
-│   ├── src/index.ts             # 路由与统一错误处理
-│   ├── src/env.ts · security.ts · auth.ts · rate.ts · mailer.ts · static.ts
-│   ├── src/handlers/            # login / dashboard / unsubscribe / api / feed / webhook
-│   ├── src/feed/                # 通知数据契约 + 赛程展开
-│   ├── wrangler.toml            # Worker 绑定声明（占位符，sync-config 注入真实值）
-│   ├── scripts/sync-config.mjs  # .env → wrangler.toml
-│   └── tests/worker.e2e.mjs     # 端到端测试
-├── scripts/                     # ops.sh 总入口 + 密钥同步 + R2 状态工具
-├── docs/                        # 部署 / 发信 / 退订 / 通知规则文档
-├── data/                        # 状态快照：seen / ai / pending / schedule / reminders / zones
-└── .github/workflows/           # notify.yml（抓取发信）· worker-ci.yml（校验）
+├── backend/                     # Python 定时任务与命令入口
+│   ├── yds/                     # 研电赛编排、来源、赛程、分析、摘要和归档同步
+│   ├── groups/                  # 自定义网址探测、变更分析和 Skill 评估
+│   ├── crawl/ · ai/             # 抓取与 robots 规则、共享 AI 客户端
+│   ├── notifications/           # 发信接口、Server 酱、退订与日历签名
+│   └── store/                   # R2 状态与运行锁
+├── cloudflare/                  # Worker 构建、绑定、D1 迁移和测试
+│   └── src/
+│       ├── index.ts             # 路由和 Durable Object 导出
+│       ├── accounts/ · admin/   # 账号订阅、管理员会话与操作
+│       ├── groups/              # 通知组、公开审核、任务回写与投递
+│       ├── notices/             # 归档、RSS 和个人日历
+│       ├── mail/ · platform/    # 出站邮件、回调、HTTP、安全和配置
+│       └── ui/                  # 由 Worker 渲染的页面、样式和浏览器脚本
+├── skills/yds/                  # 研电赛 Skill 清单、规则、契约与提示词
+├── scripts/                     # 运维入口、密钥同步和 R2 工具
+├── docs/                        # 部署、订阅、发信和设计说明
+├── data/                        # 研电赛去重、摘要、分析与赛程状态
+└── .github/workflows/            # Python 调度与 Worker 持续集成
 ```
 
 <p align="right">(<a href="#readme-top">返回顶部</a>)</p>
@@ -495,6 +534,7 @@ yds-notifier/
 | `status` | 查看配置、线上端点、最近部署与 Actions 运行 |
 | `config show\|get\|set\|check` | 查看 / 修改 / 校验 `.env`（`show` 自动脱敏） |
 | `secrets` | 从 `.env` 同步密钥到 Cloudflare + GitHub（支持 `--dry-run`） |
+| `admin-secrets` | 生成并批量上传管理员密钥到 Cloudflare（加 `--rotate` 轮换） |
 | `cf-secrets` / `gh-secrets` | 只同步其中一端（支持 `--only KEY` / `--list`） |
 | `dev-vars` | 从 `.env` 生成 `cloudflare/.dev.vars` |
 | `check` | Python 自测 + Worker 类型 / 测试 / 构建 + Wrangler 干跑 |
@@ -505,13 +545,12 @@ yds-notifier/
 
 | 想做的事 | 改哪里 |
 |---|---|
-| 增删数据源 / 改抓取深度 | `config/config.yaml` |
-| 接入新站点 | `backend/sources.py` 继承 `BaseSource`，配置 `allowed_hosts` |
-| 更换发信服务商 | `backend/senders.py` 继承 `BaseSender` |
-| 调整邮件样式 | `backend/mailer.py` 的 `build_html` |
-| 修改 Worker 界面 / 后端 | `frontend/` / `cloudflare/src/handlers/` |
-| 调整栏目 | 同步修改 `cloudflare/src/auth.ts` 的 `CATEGORIES` 与 `backend/recipients.py` 的 `CATEGORY_TO_KEY` |
-| `admin-secrets` | 生成并批量上传管理员密钥到 Cloudflare（加 `--rotate` 轮换） |
+| 增删数据源 / 改抓取深度 | `skills/yds/config.yaml` |
+| 接入新站点 | `backend/yds/sources.py` 继承 `BaseSource`，配置 `allowed_hosts` |
+| 更换发信服务商 | `backend/notifications/senders.py` 继承 `BaseSender` |
+| 调整邮件样式 | `backend/yds/mailer.py` 的 `build_html` |
+| 修改 Worker 界面 / 后端 | `cloudflare/src/ui/` 与相应的账号、通知组或归档模块 |
+| 调整栏目 | 同步修改 `cloudflare/src/accounts/auth.ts` 的 `CATEGORIES` 与 `backend/yds/recipients.py` 的 `CATEGORY_TO_KEY` |
 | 更换站点域名 | 改 `.env` 的 `CUSTOM_DOMAIN`，跑 `ops.sh secrets` 与 `ops.sh deploy` |
 | 更换发件地址 | 改 `MAIL_FROM_ADDRESS` 并跑 `ops.sh secrets`；Resend 侧需先验证该域名 |
 
@@ -578,7 +617,7 @@ Disallow: /
 - 本地留存：`data/` 下为去重指纹、AI 生成的元数据（阶段、面向人群、事件日期）与用于日期抽取的截断正文片段（单条上限 `AI_MAX_BODY_CHARS`，默认 3000 字符），不镜像完整页面。
 
 **4. robots.txt 策略与当前部署取值**
-抓取层（`backend/fetch.py` + `backend/robots.py`）解析目标站 robots.txt，提供三档策略：`enforce`（代码默认，命中 `Disallow` 的地址一个字节都不请求）、`warn`（只记日志、继续抓取）、`off`（不校验）。取不到 robots.txt 时按放行处理，避免站点抖动导致整轮停摆。
+抓取层（`backend/crawl/fetch.py` + `backend/crawl/robots.py`）解析目标站 robots.txt，提供三档策略：`enforce`（代码默认，命中 `Disallow` 的地址一个字节都不请求）、`warn`（只记日志、继续抓取）、`off`（不校验）。取不到 robots.txt 时按放行处理，避免站点抖动导致整轮停摆。
 **当前在线实例设为 `warn`**：维护者已知悉站方禁止，仍以个人订阅用途保持低频抓取，相应责任由维护者承担。自行部署者应独立选择策略，并对自己实例的抓取行为负责。
 
 **5. 停止与删除**

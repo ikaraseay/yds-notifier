@@ -6,14 +6,12 @@ on:
   push:
     paths:
       - "cloudflare/**"
-      - "frontend/**"
-      - "config/**"
+      - "skills/**"
       - ".github/workflows/worker-ci.yml"
   pull_request:
     paths:
       - "cloudflare/**"
-      - "frontend/**"
-      - "config/**"
+      - "skills/**"
   workflow_dispatch:
     inputs:
       deploy:
@@ -35,7 +33,7 @@ jobs:
       - name: 安装 Node
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          node-version: "22"
           cache: npm
           cache-dependency-path: cloudflare/package-lock.json
 
@@ -49,7 +47,9 @@ jobs:
 
       - name: 端到端测试
         working-directory: cloudflare
-        run: npm test
+        run: |
+          npm test
+          node tests/groups.e2e.mjs
 
       - name: 构建 dist/index.js
         working-directory: cloudflare

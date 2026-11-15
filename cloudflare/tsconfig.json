@@ -18,7 +18,6 @@
   },
   "include": [
     "src/**/*.ts",
-    "../frontend/**/*.ts",
-    "../config/*.json"
+    "../skills/*/*.json"
   ]
 }

@@ -100,7 +100,20 @@ const routes = customDomain
   ? `\n[[routes]]\npattern = ${JSON.stringify(customDomain)}\ncustom_domain = true\n`
   : `\n# 未配置 CUSTOM_DOMAIN：仅通过 workers.dev 访问\n`;
 
-const block = `${BEGIN}\nid = ${JSON.stringify(kvId)}\n${routes}${END}`;
+const existingGroupsId = src.match(/database_id = "([a-f0-9-]{36})"/i)?.[1] || "";
+const groupsId = get("D1_GROUPS_ID") || existingGroupsId;
+if (groupsId && !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(groupsId)) {
+  console.error("[sync-config] D1_GROUPS_ID 必须是数据库 UUID");
+  process.exit(1);
+}
+const groups = groupsId ? `
+[[d1_databases]]
+binding = "GROUPS"
+database_name = "meonotifier-groups"
+database_id = ${JSON.stringify(groupsId)}
+migrations_dir = "group-migrations"
+` : "";
+const block = `${BEGIN}\nid = ${JSON.stringify(kvId)}\n${routes}${groups}${END}`;
 const next = src.replace(blockRe, block);
 if (next !== src) fs.writeFileSync(TOML_PATH, next);
 
