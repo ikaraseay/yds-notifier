@@ -100,8 +100,13 @@ const routes = customDomain
   ? `\n[[routes]]\npattern = ${JSON.stringify(customDomain)}\ncustom_domain = true\n`
   : `\n# 未配置 CUSTOM_DOMAIN：仅通过 workers.dev 访问\n`;
 
-const existingGroupsId = src.match(/database_id = "([a-f0-9-]{36})"/i)?.[1] || "";
+const generatedGroups = src.match(blockRe)[0].split(/\[\[d1_databases\]\]/)
+  .find(section => /^binding\s*=\s*"GROUPS"\s*$/m.test(section)) || "";
+const existingGroupsId = generatedGroups.match(/^database_id\s*=\s*"([^"]+)"\s*$/m)?.[1] || "";
 const groupsId = get("D1_GROUPS_ID") || existingGroupsId;
+const groupsName = get("D1_GROUPS_NAME")
+  || (groupsId === existingGroupsId && generatedGroups.match(/^database_name\s*=\s*"([^"]+)"\s*$/m)?.[1])
+  || "meonotifier-groups";
 if (groupsId && !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(groupsId)) {
   console.error("[sync-config] D1_GROUPS_ID 必须是数据库 UUID");
   process.exit(1);
@@ -109,7 +114,7 @@ if (groupsId && !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(groupsId)
 const groups = groupsId ? `
 [[d1_databases]]
 binding = "GROUPS"
-database_name = "meonotifier-groups"
+database_name = ${JSON.stringify(groupsName)}
 database_id = ${JSON.stringify(groupsId)}
 migrations_dir = "group-migrations"
 ` : "";

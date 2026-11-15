@@ -341,14 +341,14 @@ bash scripts/ops.sh admin-secrets
 
 #### 启用 MeoNotifier 通知组
 
-通知组使用独立的 D1 数据库。运行下列命令创建数据库，然后将输出的数据库 UUID 设为根目录 `.env` 和 Workers Builds 构建变量中的 `D1_GROUPS_ID`。
+在仓库根目录运行下列命令。脚本会查找 Cloudflare 账号中已有的 D1，执行通知组表迁移，并把绑定所需的配置保存到 `.env`。重复运行时，Wrangler 只应用尚未执行的迁移。
 
 ```bash
-cd cloudflare
-npx wrangler d1 create meonotifier-groups
-npm run sync-config
-npx wrangler d1 migrations apply GROUPS --remote
+bash scripts/ops.sh groups-setup
+bash scripts/ops.sh deploy
 ```
+
+默认使用 `.env` 已配置的 `D1_GROUPS_ID`，否则按名称查找 `meonotifier-groups`。如果已有数据库使用其他名称，可运行 `bash scripts/ops.sh groups-setup '已有数据库名'`，也可传入 UUID。使用 Workers Builds 自动部署时，将脚本输出的 `D1_GROUPS_ID` 和 `D1_GROUPS_NAME` 填入构建变量，后续构建会生成 `GROUPS` 绑定。
 
 生成独立的随机 `GROUP_RUNNER_TOKEN`，将同一个值写入 Worker 的运行时 Secret 与 GitHub Actions Secret。可从根目录 `.env` 通过 `bash scripts/ops.sh secrets --only GROUP_RUNNER_TOKEN` 同步。现有部署若覆盖了 `SITE_NAME` 或 `MAIL_FROM_NAME`，需要将 Worker 和 Actions 对应值改为 `MeoNotifier`。通知组邮件使用 Worker 的 Resend 配置。部署 Worker 后，在 `/admin/groups` 向已注册邮箱授予创建权限，通过 `/groups` 创建、试抓和订阅通知组。
 
@@ -535,6 +535,7 @@ yds-notifier/
 | `config show\|get\|set\|check` | 查看 / 修改 / 校验 `.env`（`show` 自动脱敏） |
 | `secrets` | 从 `.env` 同步密钥到 Cloudflare + GitHub（支持 `--dry-run`） |
 | `admin-secrets` | 生成并批量上传管理员密钥到 Cloudflare（加 `--rotate` 轮换） |
+| `groups-setup [数据库名或 UUID]` | 复用已有 D1，迁移通知组表并保存绑定配置 |
 | `cf-secrets` / `gh-secrets` | 只同步其中一端（支持 `--only KEY` / `--list`） |
 | `dev-vars` | 从 `.env` 生成 `cloudflare/.dev.vars` |
 | `check` | Python 自测 + Worker 类型 / 测试 / 构建 + Wrangler 干跑 |

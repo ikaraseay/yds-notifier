@@ -12,6 +12,7 @@
 #   bash scripts/ops.sh dev-vars      从 .env 生成 cloudflare/.dev.vars
 #   bash scripts/ops.sh check         本地校验：自测 / 类型 / 测试 / 干跑
 #   bash scripts/ops.sh deploy        构建并部署 Worker
+#   bash scripts/ops.sh groups-setup [数据库名或 UUID]  初始化已有 D1 的通知组表
 #   bash scripts/ops.sh notify       触发 Actions（normal | check）
 #   bash scripts/ops.sh r2           状态存储（status / diff / seed / refresh / enable / pull）
 #   bash scripts/ops.sh logs          最近 Actions 运行 / 指定 run 的日志
@@ -41,12 +42,12 @@ inject_worker_config() {
   WORKER_CONFIG_BACKUP="$(mktemp)"
   cp "$WRANGLER_CONFIG" "$WORKER_CONFIG_BACKUP"
   (cd "$WORKER_DIR" && npm run --silent sync-config >/dev/null) \
-    || { restore_worker_config; die "sync-config 失败：检查 .env 的 KV_SUBS_ID"; }
+    || { restore_worker_config; die "sync-config 失败：检查 .env 的 KV 和 D1 绑定配置"; }
 }
 trap restore_worker_config EXIT
 
 usage() {
-  sed -n '2,23p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  sed -n '2,24p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
   exit 0
 }
 
@@ -246,6 +247,37 @@ cmd_check() {
   wrangler deploy --dry-run --outdir /tmp/yds-dryrun 2>&1 | tail -6 | sed 's/^/  /'
   restore_worker_config
   ok "本地校验全部通过"
+}
+
+cmd_groups_setup() {
+  [ "$#" -le 1 ] || die "用法：bash scripts/ops.sh groups-setup [数据库名或 UUID]"
+  load_config
+  local target="${1:-${D1_GROUPS_ID:-meonotifier-groups}}" database
+  step "查找已有 D1 数据库：$target"
+  database="$(wrangler d1 list --json | node -e '
+    const databases = JSON.parse(require("node:fs").readFileSync(0, "utf8"));
+    const target = process.argv[1];
+    const matches = databases.filter(db => db.name === target || db.uuid === target);
+    if (matches.length !== 1) process.exit(1);
+    const {uuid, name} = matches[0];
+    if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(uuid) ||
+        !/^[a-zA-Z0-9_-]+$/.test(name)) process.exit(1);
+    console.log(uuid, name);
+  ' -- "$target")" || die "未能唯一匹配已有 D1，请用 Wrangler 核对账号、D1 权限和数据库名"
+  read -r D1_GROUPS_ID D1_GROUPS_NAME <<< "$database"
+  export D1_GROUPS_ID D1_GROUPS_NAME
+  inject_worker_config
+  step "在 $D1_GROUPS_NAME 初始化通知组表"
+  wrangler d1 migrations apply GROUPS --remote
+  restore_worker_config
+  (
+    umask 077
+    config_set D1_GROUPS_ID "$D1_GROUPS_ID"
+    config_set D1_GROUPS_NAME "$D1_GROUPS_NAME"
+  )
+  ok "已初始化现有数据库，绑定配置已保存到 $CONFIG_FILE"
+  note "部署 Worker：bash scripts/ops.sh deploy"
+  note "Workers Builds 构建变量：D1_GROUPS_ID=${D1_GROUPS_ID}，D1_GROUPS_NAME=${D1_GROUPS_NAME}"
 }
 
 cmd_deploy() {
@@ -523,6 +555,7 @@ case "$CMD" in
   dev-vars)     cmd_dev_vars ;;
   check)        cmd_check ;;
   deploy)       cmd_deploy ;;
+  groups-setup) cmd_groups_setup "$@" ;;
   notify)       cmd_notify "$@" ;;
   r2)           cmd_r2 "$@" ;;
   logs)         cmd_logs "$@" ;;
