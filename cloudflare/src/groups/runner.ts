@@ -77,6 +77,7 @@ export async function handleGroupRunner(req: Request, env: Env): Promise<Respons
   const published = row.published ? resultSources(parseConfig(row.published), body.published) : null;
   if (!draft || (row.published && !published)) return jsonResp({ message: "invalid sources" }, 400);
   const statements: D1PreparedStatement[] = [];
+  let publicChanges = false;
   for (const [config, raw, shared] of [[draft, body.privateChanges, false], [published, body.publicChanges, true]] as const) {
     if (!config?.enabled || !Array.isArray(raw) || !raw.length) continue;
     const changes: Change[] = raw.filter((item): item is Change => item && typeof item.summary === "string" &&
@@ -86,6 +87,7 @@ export async function handleGroupRunner(req: Request, env: Env): Promise<Respons
     const hash = await sha256(`${row.id}:${row.revision}:${Number(shared)}`);
     const subject = `[MeoNotifier] ${config.name} · 网站更新`;
     if (shared) {
+      publicChanges = true;
       statements.push(db.prepare(`INSERT INTO group_deliveries(id,group_id,email,subject,body,due,shared)
         SELECT CASE WHEN s.frequency='instant' THEN ?||':'||s.email
           ELSE g.id||':'||s.email||':'||s.frequency||':'||CASE s.frequency WHEN 'daily' THEN ? ELSE ? END END,
@@ -103,12 +105,14 @@ export async function handleGroupRunner(req: Request, env: Env): Promise<Respons
     }
   }
   let skill = row.skill;
-  if (published && skill && Array.isArray(body.publicChanges) && body.publicChanges.length) {
+  if (skill && publicChanges && body.evaluated === true) {
     const current = JSON.parse(skill) as Skill;
     current.evaluated = (current.evaluated || 0) + 1;
-    if (typeof body.candidate === "string" && body.candidate.trim() && typeof body.evidence === "string") {
-      current.candidate = body.candidate.trim().slice(0, 600);
-      current.evidence = body.evidence.slice(0, 1000);
+    const candidate = typeof body.candidate === "string" ? body.candidate.trim() : "";
+    const evidence = typeof body.evidence === "string" ? body.evidence.trim() : "";
+    if (candidate && candidate.length <= 600 && candidate !== current.guidance && evidence) {
+      current.candidate = candidate;
+      current.evidence = evidence.slice(0, 1000);
     }
     skill = JSON.stringify(current);
   }

@@ -33,10 +33,12 @@ from .robots import RobotsRules, parse as parse_robots
 
 log = logging.getLogger("yds")
 
-# 抓取标识：如实声明自己是谁，不伪装浏览器。
-# 自定义用 CRAWLER_UA 覆盖（例如自建实例带上自己的联系方式）。
-# 注意必须是纯 ASCII：HTTP 头按 latin-1 编码，中文会直接让整轮抓取抛错。
-DEFAULT_UA = "yds-notifier/1.0 (+https://github.com/ikaraseay/yds-notifier)"
+# 网页请求默认使用 Chromium 的精简桌面 UA，robots.txt 仍按原采集身份选组。
+DEFAULT_UA = (
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+    "(KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36"
+)
+ROBOTS_AGENT = "yds-notifier"
 
 
 def _ascii_ua(value: str) -> str:
@@ -137,7 +139,7 @@ def _robots_for(host: str) -> Optional[RobotsRules]:
                 headers={"User-Agent": UA, "Accept": "text/plain,*/*;q=0.8"},
             )
             if resp.status_code == 200:
-                rules = parse_robots(resp.text, ua_token=UA)
+                rules = parse_robots(resp.text, ua_token=ROBOTS_AGENT if UA == DEFAULT_UA else UA)
                 log.info(
                     "robots.txt：%s 共 %s 条规则（%s）",
                     host, len(rules.rules), RESPECT_ROBOTS,

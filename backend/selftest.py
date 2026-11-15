@@ -352,7 +352,8 @@ def main() -> int:
         ua_token="yds-notifier/1.0",
     )
     check("专属 UA 组优先于 *", specific.allows("/public/x") and not specific.allows("/private/x"))
-    check("抓取标识不伪装浏览器", "Mozilla" not in fetch_mod.UA and "yds-notifier" in fetch_mod.UA)
+    check("默认采集 UA 使用标准 Chromium 格式", fetch_mod.DEFAULT_UA.startswith("Mozilla/5.0 ")
+          and " Chrome/" in fetch_mod.DEFAULT_UA and fetch_mod.DEFAULT_UA.endswith(" Safari/537.36"))
     # HTTP 头按 latin-1 编码：UA 里有中文会让每次请求直接抛错（曾把整轮抓取打挂）
     check("抓取标识是纯 ASCII", all(ord(ch) < 128 for ch in fetch_mod.UA), fetch_mod.UA)
     check("中文 UA 会被收敛成 ASCII", all(

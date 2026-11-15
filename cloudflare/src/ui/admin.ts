@@ -5,6 +5,7 @@ import { page } from "./layout";
 
 const VIEWS = [
   { key: "overview", title: "运营概览", url: "/admin" },
+  { key: "groups", title: "通知组管理", url: "/admin/groups" },
   { key: "subscribers", title: "订阅管理", url: "/admin?view=subscribers" },
   { key: "archive", title: "通知归档", url: "/admin?view=archive" },
 ] as const;
@@ -35,7 +36,7 @@ export function adminLoginPage(message = "", status = 200): Response {
   }, status);
 }
 
-function adminPage(view: (typeof VIEWS)[number]["key"], content: string): Response {
+export function adminPage(view: (typeof VIEWS)[number]["key"], content: string): Response {
   const title = VIEWS.find((item) => item.key === view)!.title;
   const nav = VIEWS.map(({ key, title, url }) =>
     `<a href="${url}"${key === view ? ' aria-current="page"' : ""}>${title}</a>`,
@@ -47,7 +48,6 @@ function adminPage(view: (typeof VIEWS)[number]["key"], content: string): Respon
     body: `<div class="admin-shell">
       <aside class="admin-sidebar">
         <nav aria-label="管理后台">${nav}</nav>
-        <a href="/admin/groups">通知组管理</a>
         <a href="/">订阅首页</a>
         <form method="post" action="/api/admin/logout"><button type="submit" class="btn-mini">退出登录</button></form>
       </aside>
@@ -60,6 +60,7 @@ export function adminOverviewPage(
   subscribers: SubRecord[],
   stats: Record<string, unknown>,
   feed: { notices: Notice[]; generatedAt: string },
+  groups?: { pending: number; published: number; runnerReady: boolean },
 ): Response {
   const confirmed = subscribers.filter(isConfirmed).length;
   const reasons = stats.reasons && typeof stats.reasons === "object" ? Object.entries(stats.reasons) : [];
@@ -70,6 +71,11 @@ export function adminOverviewPage(
   ].map(([label, value]) => `<div><dt>${label}</dt><dd>${value}</dd></div>`).join("");
   return adminPage("overview", `
     <dl class="admin-metrics">${metrics}</dl>
+    <section class="work-panel">
+      <div class="work-heading"><div><h3>通知组运营</h3>
+        <p>${groups ? `${groups.pending} 个待审核 · ${groups.published} 个已公开 · ${groups.runnerReady ? "后台任务密钥已配置" : "后台任务密钥未配置"}` : "通知组数据库尚未配置。"}</p></div>
+        <a href="/admin/groups">管理通知组</a></div>
+    </section>
     <p>最近归档同步　${displayDate(feed.generatedAt)}</p>
     <section class="admin-section">
       <h3>退订与降频</h3>

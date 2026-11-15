@@ -45,8 +45,14 @@ export async function handleAdmin(req: Request, env: Env, url: URL): Promise<Res
   if (section === "archive") return adminArchivePage(await loadFeed(env));
   const subscribers = await listSubscribers(env.SUBS);
   if (section === "subscribers") return adminSubscribersPage(subscribers, url);
-  const [stats, feed] = await Promise.all([getUnsubscribeStats(env), loadFeed(env)]);
-  return adminOverviewPage(subscribers, stats, feed);
+  const [stats, feed, counts] = await Promise.all([
+    getUnsubscribeStats(env), loadFeed(env),
+    env.GROUPS?.prepare(`SELECT COUNT(CASE WHEN visibility='pending' THEN 1 END) AS pending,
+      COUNT(published) AS published FROM notification_groups`).first<{pending: number; published: number}>(),
+  ]);
+  return adminOverviewPage(subscribers, stats, feed, counts ? {
+    ...counts, runnerReady: Boolean(env.GROUP_RUNNER_TOKEN),
+  } : undefined);
 }
 
 export async function handleAdminLogin(req: Request, env: Env): Promise<Response> {

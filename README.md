@@ -471,7 +471,7 @@ R2 读不到（网络 / 权限 / 桶名错）或状态对象全丢时直接中�
 
 ### 抓取标识与 robots 策略
 
-- `CRAWLER_UA`：默认 `yds-notifier/1.0 (+https://github.com/ikaraseay/yds-notifier)`，如实声明、纯 ASCII，不伪装浏览器；
+- 网页采集默认使用标准 Chromium 桌面 User-Agent。研电赛采集可用 `CRAWLER_UA` 覆盖。默认的 robots.txt 检查仍按各自的采集身份匹配站点规则。
 - `RESPECT_ROBOTS`：`enforce`（代码默认，命中 `Disallow` 的地址一个字节都不请求）/ `warn`（只记日志、继续抓取）/ `off`（不校验）。取不到 robots.txt 时按放行处理。
 
 行为与合规边界见 [数据来源与免责声明](#disclaimer)。

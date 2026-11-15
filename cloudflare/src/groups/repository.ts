@@ -16,3 +16,10 @@ export async function deleteUserGroups(db: D1Database, email: string): Promise<v
     db.prepare("DELETE FROM group_creators WHERE email=?").bind(email),
   ]);
 }
+
+export function reviewReady(config: GroupConfig, now: number): boolean {
+  return config.sources.length > 0 && config.sources.every(source =>
+    source.status === "ready" && source.prompt && source.baseline &&
+    source.checked && source.checked >= now - 24 * 60 * 60 * 1000,
+  );
+}

@@ -28,59 +28,80 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
   const canCreate = !!await db.prepare("SELECT 1 FROM group_creators WHERE email=?").bind(email).first();
   if (req.method === "GET") {
     const [groups, subs] = await Promise.all([
-      db.prepare("SELECT * FROM notification_groups WHERE owner=? OR published IS NOT NULL ORDER BY (owner=?) DESC,id LIMIT 100").bind(email, email).all<GroupRow>(),
+      db.prepare(`SELECT g.* FROM notification_groups g WHERE g.owner=? OR (
+        g.published IS NOT NULL AND (g.id IN (
+          SELECT id FROM notification_groups WHERE published IS NOT NULL ORDER BY id LIMIT 100
+        ) OR EXISTS (SELECT 1 FROM group_subscriptions WHERE group_id=g.id AND email=?))
+      ) ORDER BY g.id`).bind(email, email).all<GroupRow>(),
       db.prepare("SELECT group_id,frequency FROM group_subscriptions WHERE email=?").bind(email).all<{group_id: string; frequency: string}>(),
     ]);
-    return groupsPage(email, groups.results, new Map(subs.results.map(s => [s.group_id, s.frequency])), canCreate);
+    return groupsPage(email, groups.results, new Map(subs.results.map(s => [s.group_id, s.frequency])), canCreate, new URL(req.url), Boolean(env.GROUP_RUNNER_TOKEN));
   }
   if (!sameOrigin(req)) return groupErrorPage("请求来源无效。", 403);
   const form = await readForm(req, 16000);
   const action = form?.get("action");
   if (!form || !action) return groupErrorPage("表单无效。");
   const id = form.get("id") || "";
-  const back = () => redirect("/groups", undefined, 303);
+  const back = (view = "mine", group = "") => {
+    const params = new URLSearchParams({ view, done: action });
+    if (group) params.set("id", group);
+    return redirect(`/groups?${params}`, undefined, 303);
+  };
+  const subscriptionView = form.get("view") === "subscribed" ? "subscribed" : "directory";
   if (action === "create") {
     if (!canCreate) return groupErrorPage("创建权限由管理员授予。", 403);
     const name = (form.get("name") || "").trim();
     if (!name || name.length > 80 || CONTROL.test(name)) return groupErrorPage("请输入有效的组名。");
+    const groupId = crypto.randomUUID();
     const result = await db.prepare(`INSERT INTO notification_groups (id, owner, draft)
       SELECT ?,?,? WHERE EXISTS (SELECT 1 FROM group_creators WHERE email=?)
       AND (SELECT COUNT(*) FROM notification_groups WHERE owner=?) < 10`)
-      .bind(crypto.randomUUID(), email, JSON.stringify({ name, sources: [], enabled: false }), email, email).run();
-    return result.meta.changes ? back() : groupErrorPage("已达到 10 个通知组的上限，或创建权限已收回。", 409);
+      .bind(groupId, email, JSON.stringify({ name, sources: [], enabled: false }), email, email).run();
+    return result.meta.changes ? back("mine", groupId) : groupErrorPage("已达到 10 个通知组的上限，或创建权限已收回。", 409);
   }
   if (action === "unsubscribe") {
     await db.batch([
       db.prepare("DELETE FROM group_subscriptions WHERE group_id=? AND email=?").bind(id, email),
       db.prepare("DELETE FROM group_deliveries WHERE group_id=? AND email=? AND shared=1 AND sent IS NULL").bind(id, email),
     ]);
-    return back();
+    return back(subscriptionView);
   }
   const row = await loadGroup(db, id);
   if (action === "subscribe" && row?.published && row.owner !== email) {
-    await db.prepare(`INSERT INTO group_subscriptions(group_id,email,frequency)
+    const result = await db.prepare(`INSERT INTO group_subscriptions(group_id,email,frequency)
       SELECT id,?,? FROM notification_groups WHERE id=? AND published IS NOT NULL
       ON CONFLICT(group_id,email) DO UPDATE SET frequency=excluded.frequency`)
       .bind(email, frequency(form.get("frequency")), id).run();
-    return back();
+    return result.meta.changes ? back(subscriptionView) : groupErrorPage("通知组已停止公开。", 409);
   }
   if (!row || row.owner !== email) return groupErrorPage("未找到可编辑的通知组。", 404);
-  if (form.get("revision") !== String(row.revision)) return groupErrorPage("通知组已有更新，请刷新后重试。", 409);
+  const fail = (message: string, status = 400) =>
+    groupErrorPage(message, status, `/groups?view=mine&id=${encodeURIComponent(id)}`);
+  if (form.get("revision") !== String(row.revision)) return fail("通知组已有更新，请重新打开后重试。", 409);
   const draft = parseConfig(row.draft);
   let { visibility, published, skill, review_note } = row;
   const statements: D1PreparedStatement[] = [];
   switch (action) {
+    case "rename": {
+      const name = (form.get("name") || "").trim();
+      if (!name || name.length > 80 || CONTROL.test(name)) return fail("请输入有效的组名。");
+      draft.name = name;
+      break;
+    }
     case "add": {
       try {
         const urls = [...new Set((form.get("urls") || "").split(/\s+/).filter(Boolean).map(inputUrl))];
         const additions = urls.filter(url => !draft.sources.some(source => source.url === url));
-        if (!urls.length || draft.sources.length + additions.length > 10) return groupErrorPage("每个组最多监控 10 个网址。");
+        if (!urls.length || draft.sources.length + additions.length > 10) return fail("每个组最多监控 10 个网址。");
         for (const url of additions) draft.sources.push({ url, prompt: "" });
         for (const source of draft.sources) {
-          if (urls.includes(source.url) && source.status !== "ready") source.status = undefined;
+          if (urls.includes(source.url) && source.status !== "ready") {
+            source.status = undefined;
+            source.detail = undefined;
+          }
         }
       } catch {
-        return groupErrorPage("请输入有效的 HTTP 或 HTTPS 网址。");
+        return fail("请输入有效的 HTTP 或 HTTPS 网址。");
       }
       break;
     }
@@ -88,17 +109,17 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
     case "remove-source": {
       const index = form.get("index") || "";
       const source = /^\d+$/.test(index) ? draft.sources[Number(index)] : undefined;
-      if (!source) return groupErrorPage("未找到这个网址。");
+      if (!source) return fail("未找到这个网址。");
       if (action === "remove-source") draft.sources.splice(Number(index), 1);
       else {
         const prompt = (form.get("prompt") || "").trim();
-        if (!prompt || prompt.length > 600) return groupErrorPage("提示词须为 1 至 600 字。");
+        if (!prompt || prompt.length > 600) return fail("提示词须为 1 至 600 字。");
         source.prompt = prompt;
       }
       break;
     }
     case "enable":
-      if (!draft.sources.some(source => source.status === "ready")) return groupErrorPage("请先完成至少一个网址的试抓。");
+      if (!draft.sources.some(source => source.status === "ready")) return fail("请先完成至少一个网址的试抓。");
       draft.enabled = true;
       if (published) published = JSON.stringify({ ...parseConfig(published), enabled: true });
       break;
@@ -107,18 +128,20 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
       if (published) published = JSON.stringify({ ...parseConfig(published), enabled: false });
       break;
     case "request-public":
+      if (!env.GROUP_RUNNER_TOKEN) return fail("试抓服务尚未启用，暂时无法提交公开审核。", 503);
       if (form.get("confirm") !== "yes" || !draft.sources.length ||
           draft.sources.some(source => source.status !== "ready" || !source.prompt)) {
-        return groupErrorPage("请确认邮箱展示，并为每个成功试抓的网址填写提示词。");
+        return fail("请确认邮箱展示，并为每个成功试抓的网址填写提示词。");
       }
       visibility = "pending";
       review_note = "";
       for (const source of draft.sources) source.checked = undefined;
       break;
-    case "delete":
-      if (form.get("confirm") !== "yes") return groupErrorPage("请确认删除。");
-      await db.prepare("DELETE FROM notification_groups WHERE id=? AND revision=?").bind(id, row.revision).run();
-      return back();
+    case "delete": {
+      if (form.get("confirm") !== "yes") return fail("请确认删除。");
+      const result = await db.prepare("DELETE FROM notification_groups WHERE id=? AND revision=?").bind(id, row.revision).run();
+      return result.meta.changes ? back() : fail("通知组已有更新，请重新打开后重试。", 409);
+    }
     case "withdraw":
       visibility = "private";
       published = null;
@@ -126,13 +149,13 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
       break;
     case "apply-skill":
     case "rollback-skill": {
-      if (!published || !skill) return groupErrorPage("只有已公开的组可以管理 Skill。", 409);
+      if (!published || !skill) return fail("只有已公开的组可以管理 Skill。", 409);
       const current = JSON.parse(skill) as Skill;
       const previous = action === "rollback-skill" ? await db.prepare(
         "SELECT rules FROM group_skills WHERE group_id=? AND version<? ORDER BY version DESC LIMIT 1",
       ).bind(id, current.version).first<string>("rules") : null;
       const guidance = action === "apply-skill" ? current.candidate : previous;
-      if (guidance === undefined || guidance === null) return groupErrorPage("没有可采用的版本。");
+      if (guidance === undefined || guidance === null) return fail("没有可采用的版本。");
       const version = current.version + 1;
       skill = JSON.stringify({ version, guidance, evaluated: current.evaluated });
       statements.push(db.prepare(`INSERT INTO group_skills SELECT ?,?,?,?,? WHERE EXISTS (
@@ -141,7 +164,7 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
       break;
     }
     default:
-      return groupErrorPage("未知操作。");
+      return fail("未知操作。");
   }
   if (action === "withdraw") {
     statements.push(db.prepare(`DELETE FROM group_subscriptions WHERE group_id=? AND EXISTS (
@@ -149,7 +172,7 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
     statements.push(db.prepare(`DELETE FROM group_deliveries WHERE group_id=? AND shared=1 AND sent IS NULL AND EXISTS (
       SELECT 1 FROM notification_groups WHERE id=? AND revision=?)`).bind(id, id, row.revision));
   }
-  if (["add", "prompt", "remove-source"].includes(action) && visibility === "pending") {
+  if (["add", "prompt", "remove-source", "rename"].includes(action) && visibility === "pending") {
     visibility = published ? "public" : "private";
     review_note = "内容已修改，请重新提交公开审核。";
   }
@@ -160,5 +183,5 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
       SELECT 1 FROM notification_groups WHERE id=? AND revision=?)`).bind(id, id, row.revision));
   }
   const results = await db.batch(statements);
-  return results.at(-1)?.meta.changes ? back() : groupErrorPage("通知组已有更新，请刷新后重试。", 409);
+  return results.at(-1)?.meta.changes ? back("mine", id) : fail("通知组已有更新，请重新打开后重试。", 409);
 }

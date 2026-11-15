@@ -20,7 +20,6 @@ from typing import Optional, Sequence
 import requests
 
 from ..config import settings
-from ..crawl.fetch import UA
 
 log = logging.getLogger("yds")
 
@@ -97,7 +96,7 @@ class ResendSender(BaseSender):
             # Resend 支持自定义邮件头，用于 List-Unsubscribe 等标准头
             payload["headers"] = dict(extra_headers)
 
-        headers = {"Authorization": f"Bearer {self.api_key}", "User-Agent": UA}
+        headers = {"Authorization": f"Bearer {self.api_key}"}
         last: Optional[str] = None
         for attempt in (1, 2, 3):
             try:

@@ -200,6 +200,54 @@ select.field{appearance:none;background-image:none;cursor:pointer}
 .admin-table form{display:flex;align-items:center;gap:8px;margin:0}
 .admin-confirm{display:flex;align-items:center;gap:2px}
 .admin-pagination{display:flex;gap:14px;margin-top:16px;font-size:13px}
+.work-area{max-width:780px;margin:20px auto 0}
+.work-area a{color:#285887}
+.work-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0 20px;padding:5px;
+  border:2px solid var(--memphis-ink);border-radius:8px;background:var(--memphis-background)}
+.work-tabs a{padding:8px 12px;border:2px solid transparent;border-radius:5px;
+  color:var(--memphis-ink);text-decoration:none;font-size:14px;font-weight:750}
+.work-tabs a:hover,.work-tabs [aria-current=page]{border-color:var(--memphis-ink);background:var(--memphis-yellow)}
+.work-area :focus-visible,.admin-main .work-tabs :focus-visible,
+.work-panel :focus-visible,.work-row :focus-visible{outline:3px solid var(--memphis-blue);outline-offset:2px}
+.work-area h2{font-size:23px;margin:0 0 4px}
+.work-heading h2,.admin-main .work-heading h3,.work-panel h3,.work-heading h3{margin:0}
+.work-panel h3,.work-heading h3{font-size:16px}
+.work-heading,.work-row,.work-source>summary{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.work-heading>:first-child,.work-row>:first-child,.work-source>summary span:first-child{min-width:0;overflow-wrap:anywhere}
+.work-heading p{margin:3px 0}
+.work-section{margin-top:18px;padding-top:14px;border-top:1px solid #ded8d1}
+.work-list{display:grid;gap:10px;margin-top:12px}
+.work-panel,.work-row,.work-source,.work-create{
+  min-width:0;border:1px solid #c9c0b9;border-radius:8px;padding:13px 15px;background:#fff;overflow-wrap:anywhere}
+.work-create{margin-top:12px;background:#fff9ea}
+.work-row small{display:block;margin-top:4px;color:#4a4550}
+a.work-row{color:var(--memphis-ink);text-decoration:none}
+a.work-row:hover{border-color:var(--memphis-ink);background:#fff9ea}
+.work-source>summary::before{content:"▸";flex:none}
+.work-source[open]>summary::before{content:"▾"}
+.work-source>summary span:first-child{flex:1}
+.work-source-body{padding-top:8px}
+.work-area summary,.work-panel summary,.work-row summary{cursor:pointer;font-size:14px;font-weight:700}
+.work-panel>.work-heading+details{margin-top:12px}
+.work-status{flex:none;display:inline-block;padding:3px 7px;border-radius:5px;background:#f0ece7;
+  color:#46404a;font-size:12px;font-weight:700}
+.work-status--ready{background:#e1f4e7;color:#205633}
+.work-status--blocked,.work-status--error{background:#ffeded;color:#8b2d2d}
+.work-status--waiting{background:#fff0c2;color:#68480a}
+.work-area form,.work-panel form,.work-row form{margin:10px 0 0}
+.work-heading>form{margin:0}
+.work-area label,.work-panel label,.work-row label{display:block;font-size:13px;font-weight:650}
+.work-area label .field,.work-panel label .field{display:block;margin:5px 0 8px}
+.work-area select.field{appearance:auto}
+.work-area textarea{font:inherit;resize:vertical}
+.work-area .work-check,.work-panel .work-check,.work-row .work-check{
+  display:flex;align-items:baseline;gap:7px;margin-bottom:8px}
+.work-actions{display:flex;flex-wrap:wrap;align-items:flex-end;gap:8px 12px;margin-top:10px}
+.work-review-sources{list-style:none;padding:0;margin:10px 0}
+.work-review-sources li{padding:10px 0;border-top:1px solid #ded8d1}
+.work-sample p,.work-prompt{padding:8px;background:#f7f4ef;border-radius:5px;white-space:pre-wrap}
+.work-sample p{max-height:12rem;overflow:auto}
+.work-urls{padding-left:18px;font-size:14px}
 @media (max-width:700px){
   .admin-shell{grid-template-columns:minmax(0,1fr);gap:18px}
   .admin-sidebar{border-right:0;border-bottom:2px solid var(--memphis-ink);padding:0 0 13px}
@@ -208,6 +256,10 @@ select.field{appearance:none;background-image:none;cursor:pointer}
   .admin-sidebar nav a{padding:6px}
   .admin-metrics div{padding:8px}
   .admin-metrics dt{font-size:12px}
+  .work-panel,.work-row,.work-source,.work-create{padding:10px}
+  .work-tabs{gap:3px}
+  .work-tabs a{padding:6px;font-size:13px}
+  .work-row:has(details){align-items:start;flex-direction:column}
 }
 /* 页脚：非官方声明 + 项目地址 + 错误报告（见 ui/footer.ts） */
 .foot{width:100%;max-width:520px;margin:26px auto 0;padding:0 4px;

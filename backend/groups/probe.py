@@ -14,9 +14,10 @@ from xml.etree import ElementTree
 
 from bs4 import BeautifulSoup
 
+from ..crawl.fetch import DEFAULT_UA
 from ..crawl.robots import parse
 
-UA = "MeoNotifier"
+ROBOTS_AGENT = "MeoNotifier"
 MAX_BYTES = 1024 * 1024
 KEY_NAMES = re.compile(r"token|key|secret|pass|auth|signature|session", re.IGNORECASE)
 
@@ -59,7 +60,7 @@ def request_page(url: str) -> tuple[int, str, str, bytes]:
         target = quote(parsed.path or "/", safe="/%:@!$&'()*+,;=-._~")
         if parsed.query:
             target += "?" + quote(parsed.query, safe="=%&+/?@:!$'()*;,.-_~")
-        conn.request("GET", target, headers={"User-Agent": UA, "Accept-Encoding": "identity"})
+        conn.request("GET", target, headers={"User-Agent": DEFAULT_UA, "Accept-Encoding": "identity"})
         with conn.getresponse() as response:
             location = response.getheader("Location", "")
             content_type = response.getheader("Content-Type", "")
@@ -94,7 +95,7 @@ class SiteProbe:
                     status, _, data = self.download(origin + "/robots.txt", False)
                     if status not in (200, 404, 410):
                         raise Blocked("robots.txt 暂不可用，等待下轮检查。")
-                    self.rules[origin] = parse(data.decode("utf-8-sig", "replace"), UA)
+                    self.rules[origin] = parse(data.decode("utf-8-sig", "replace"), ROBOTS_AGENT)
                 path = target.path or "/"
                 path += "?" + target.query if target.query else ""
                 path = re.sub(

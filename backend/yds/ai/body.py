@@ -3,7 +3,7 @@
 seen.json 只存标题 / URL / 发布日期，AI 无法据此判断公告里的真实事件日。
 这里按 uid 逐个抓一次详情页，结果写进 ai.json 缓存，之后不再请求官网。
 
-网络请求统一走 `backend.crawl.fetch.get_text`，因此如实 UA、robots.txt 校验、
+网络请求统一走 `backend.crawl.fetch.get_text`，因此 User-Agent、robots.txt 校验、
 同主机并发上限、同 URL 单飞、重试与统计对本路径同样生效。
 额外的 host 白名单只作为业务侧的 SSRF 二次校验。
 """
