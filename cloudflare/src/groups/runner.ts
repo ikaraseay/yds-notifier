@@ -1,6 +1,6 @@
 import { getUser, isSuppressed, sha256 } from "../accounts/auth";
 import { sendMail } from "../mail/sender";
-import { requireBaseUrl, type Env } from "../platform/env";
+import { groupRunnerToken, requireBaseUrl, type Env } from "../platform/env";
 import { jsonResp } from "../platform/http";
 import { esc, safeEqual } from "../platform/security";
 import { loadGroup, parseConfig } from "./repository";
@@ -40,11 +40,12 @@ function deliveryTime(now: number, freq: string): number {
 
 export async function handleGroupRunner(req: Request, env: Env): Promise<Response> {
   const db = env.GROUPS;
-  if (!db || !env.GROUP_RUNNER_TOKEN) return jsonResp({ message: "runner disabled" }, 503);
+  if (!db || !groupRunnerToken(env)) return jsonResp({ message: "runner disabled" }, 503);
   const bearer = req.headers.get("Authorization") || "";
-  if (!safeEqual(bearer, `Bearer ${env.GROUP_RUNNER_TOKEN}`)) return jsonResp({ message: "unauthorized" }, 401);
+  if (!safeEqual(bearer, `Bearer ${groupRunnerToken(env)}`)) return jsonResp({ message: "unauthorized" }, 401);
   const now = Date.now();
   if (req.method === "GET") {
+    await env.SUBS.put("meta:group-runner:last-seen", String(now), { expirationTtl: 86400 });
     const rows = await db.prepare(`SELECT id,revision,visibility,draft,published,skill
       FROM notification_groups WHERE next_check<=?
       AND (published IS NOT NULL OR visibility='pending' OR json_extract(draft,'$.enabled')=1 OR EXISTS (
@@ -99,9 +100,14 @@ export async function handleGroupRunner(req: Request, env: Env): Promise<Respons
         .bind(hash, deliveryTime(now, "daily"), deliveryTime(now, "weekly"), subject, message,
           deliveryTime(now, "daily"), deliveryTime(now, "weekly"), now, row.id, row.revision));
     } else {
-      statements.push(db.prepare(`INSERT OR IGNORE INTO group_deliveries(id,group_id,email,subject,body,due)
-        SELECT ?,id,owner,?,?,? FROM notification_groups WHERE id=? AND revision=?`)
-        .bind(hash, subject, message, now, row.id, row.revision));
+      const frequency = draft.frequency || "instant";
+      const due = deliveryTime(now, frequency);
+      const deliveryId = frequency === "instant" ? hash : `${row.id}:${row.owner}:${frequency}:${due}`;
+      statements.push(db.prepare(`INSERT INTO group_deliveries(id,group_id,email,subject,body,due)
+        SELECT ?,id,owner,?,?,? FROM notification_groups WHERE id=? AND revision=?
+        ON CONFLICT(id) DO UPDATE SET body=json_insert(group_deliveries.body,'$[#]',json(excluded.body))
+          WHERE group_deliveries.sent IS NULL AND group_deliveries.attempt_until=0`)
+        .bind(deliveryId, subject, message, due, row.id, row.revision));
     }
   }
   let skill = row.skill;

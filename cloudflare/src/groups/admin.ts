@@ -1,7 +1,7 @@
 import WEB_MONITOR from "../../../skills/web-monitor/defaults.json";
 import { getUser } from "../accounts/auth";
 import { adminAuthenticated } from "../admin/handler";
-import type { Env } from "../platform/env";
+import { groupRunnerToken, type Env } from "../platform/env";
 import { readForm, redirect, sameOrigin } from "../platform/http";
 import { normalizeEmail } from "../platform/security";
 import { GROUP_ADMIN_VIEWS, groupAdminPage } from "../ui/group-admin";
@@ -30,7 +30,7 @@ export async function handleGroupAdmin(req: Request, env: Env): Promise<Response
       WHERE ${view === "pending" ? "visibility='pending'" : "published IS NOT NULL"}
       AND (? = '' OR instr(lower(owner), ?) > 0 OR instr(lower(json_extract(${view === "pending" ? "draft" : "published"},'$.name')), ?) > 0)
       ORDER BY id LIMIT 26 OFFSET ?`).bind(term, term, term, offset).all<GroupRow>()).results : [];
-    return groupAdminPage(view, query, current, groups, creators, Boolean(env.GROUP_RUNNER_TOKEN), url.searchParams.get("done") || "");
+    return groupAdminPage(view, query, current, groups, creators, Boolean(groupRunnerToken(env)), url.searchParams.get("done") || "");
   }
   if (!sameOrigin(req)) return fail("请求来源无效。", 403);
   const form = await readForm(req);
@@ -52,7 +52,7 @@ export async function handleGroupAdmin(req: Request, env: Env): Promise<Response
     const latest = await db.prepare("SELECT MAX(version) AS version FROM group_skills WHERE group_id=?")
       .bind(row.id).first<number>("version");
     const version = (latest || 0) + 1;
-    const guidance = WEB_MONITOR.summaryGuidance;
+    const guidance = draft.guidance || WEB_MONITOR.summaryGuidance;
     const skill = JSON.stringify({ version, guidance });
     const result = await db.batch([
       db.prepare(`INSERT OR IGNORE INTO group_skills SELECT ?,?,?,'公开初始版本',? WHERE EXISTS (

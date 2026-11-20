@@ -46,7 +46,7 @@ const env = {
   PUBLIC_BASE_URL: "https://notify.example.org",
   MAIL_FROM_ADDRESS: "notices@domain.net",
   RESEND_API_KEY: "test",
-  SUBS: { get: async key => kv.get(key) ?? null },
+  SUBS: { get: async key => kv.get(key) ?? null, put: async (key, value) => { kv.set(key, value); } },
 };
 const signature = createHmac("sha256", env.ADMIN_SESSION_SECRET)
   .update(`admin:${env.ADMIN_PASSWORD_HASH}:${expires}`).digest("hex");
@@ -114,15 +114,23 @@ assert.equal((await group(reader, { action: "subscribe", id: stored().id })).sta
 assert.equal((await call("/api/group-runner", { token: "admin-secret" })).status, 401);
 const tasks = (await (await runner()).json()).groups;
 assert.equal(tasks.length, 1);
+assert.ok(Number(kv.get("meta:group-runner:last-seen")) > 0);
 assert.ok(!Object.hasOwn(tasks[0], "owner"));
 const scanned = JSON.parse(stored().draft).sources.map((source, index) => ({
   ...source, status: "ready", detail: "通过", sample: "样本", prompt: `提示词 ${index}`, baseline: hash(String(index)), checked: true,
 }));
 assert.equal((await save({ draft: scanned })).status, 200);
 assert.equal((await ownerAction("enable")).status, 303);
+env.SUBSCRIBE_API_TOKEN = "shared-runner-secret";
+assert.equal((await call("/api/group-runner", { token: env.SUBSCRIBE_API_TOKEN })).status, 401);
+delete env.SUBSCRIBE_API_TOKEN;
 const runnerToken = env.GROUP_RUNNER_TOKEN;
 try {
   delete env.GROUP_RUNNER_TOKEN;
+  env.SUBSCRIBE_API_TOKEN = "shared-runner-secret";
+  assert.equal((await call("/api/group-runner", { token: env.SUBSCRIBE_API_TOKEN })).status, 200);
+  assert.match(await (await call(editor, { actor: owner })).text(), /重新试抓/);
+  delete env.SUBSCRIBE_API_TOKEN;
   const offline = await (await call(editor, { actor: owner })).text();
   assert.match(offline, /试抓服务尚未启用/);
   assert.doesNotMatch(offline, /申请公开<\/button>/);
@@ -180,4 +188,41 @@ assert.ok(!(await (await group(reader)).text()).includes(owner));
 assert.equal((await manage({ action: "revoke", email: owner, confirm: "yes" })).status, 303);
 assert.equal((await group(owner, { action: "create", name: "其他通知" })).status, 403);
 assert.match(await (await call(editor, { actor: owner })).text(), /新版校园公告/);
+// A queued probe must preserve its baseline and be discoverable even while paused.
+assert.equal((await ownerAction("pause")).status, 303);
+const priorBaseline = JSON.parse(stored().draft).sources[0].baseline;
+assert.equal((await ownerAction("probe", { index: "0" })).status, 303);
+assert.equal(JSON.parse(stored().draft).sources[0].baseline, priorBaseline);
+assert.equal(JSON.parse(stored().draft).sources[0].status, undefined);
+assert.equal((await (await runner()).json()).groups.length, 1);
+assert.equal((await ownerAction("probe", { index: "999" })).status, 400);
+assert.equal((await save({ draft: scanned })).status, 200);
+assert.equal((await ownerAction("enable")).status, 303);
+assert.equal((await ownerAction("settings", { frequency: "daily", guidance: "写明截止日期" })).status, 303);
+assert.equal(JSON.parse(stored().draft).frequency, "daily");
+assert.equal(JSON.parse(stored().draft).guidance, "写明截止日期");
+assert.equal((await save({ privateChanges: changes })).status, 200);
+assert.equal((await save({ privateChanges: [{ ...changes[0], summary: "新的截止日期" }] })).status, 200);
+const ownerDigest = sqlite.prepare("SELECT body,due FROM group_deliveries WHERE email=? AND sent IS NULL").all(owner);
+assert.equal(ownerDigest.length, 1);
+assert.ok(ownerDigest[0].due > Date.now());
+assert.equal(JSON.parse(ownerDigest[0].body).flat().length, 2);
+assert.equal((await ownerAction("pause")).status, 303);
+assert.equal(sqlite.prepare("SELECT count(*) AS n FROM group_deliveries WHERE email=? AND sent IS NULL").get(owner).n, 0);
+assert.equal((await call("/skills")).status, 302);
+const skills = await (await call("/skills", { actor: owner })).text();
+assert.match(skills, /科研通知/);
+assert.match(skills, /新版校园公告/);
+assert.match(skills, /href="\/skills\/yds"/);
+assert.equal((await group(owner, { action: "create", template: "research", name: "科研通知" })).status, 403);
+assert.equal((await manage({ action: "grant", email: owner })).status, 303);
+assert.equal((await group(owner, { action: "create", template: "missing", name: "错误模板" })).status, 400);
+assert.equal((await group(owner, { action: "create", template: "research", name: "科研通知" })).status, 303);
+const research = sqlite.prepare("SELECT * FROM notification_groups WHERE json_extract(draft,'$.templateId')='research'").get();
+const researchConfig = JSON.parse(research.draft);
+assert.equal(researchConfig.sources.length, 6);
+assert.ok(researchConfig.sources.every(source => source.prompt.includes("截止")));
+assert.equal(researchConfig.enabled, false);
+assert.match(await (await call(`/groups?view=mine&id=${research.id}`, { actor: owner })).text(), /保存通知设置/);
+assert.doesNotMatch(await (await call(`/groups?view=mine&id=${research.id}`, { actor: reader })).text(), /保存通知设置/);
 console.log("通知组 E2E 通过");

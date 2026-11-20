@@ -161,3 +161,8 @@ export function requireBaseUrl(env: Env): string {
     "没有可用的对外地址：请在 Cloudflare Variables 填 CUSTOM_DOMAIN 或 WORKERS_DEV_URL（或显式 PUBLIC_BASE_URL）",
   );
 }
+
+/** Dedicated runner credentials override the existing machine API credential. */
+export function groupRunnerToken(env: Env): string {
+  return env.GROUP_RUNNER_TOKEN?.trim() || env.SUBSCRIBE_API_TOKEN?.trim() || "";
+}

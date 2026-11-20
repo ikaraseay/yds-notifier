@@ -200,6 +200,15 @@ select.field{appearance:none;background-image:none;cursor:pointer}
 .admin-table form{display:flex;align-items:center;gap:8px;margin:0}
 .admin-confirm{display:flex;align-items:center;gap:2px}
 .admin-pagination{display:flex;gap:14px;margin-top:16px;font-size:13px}
+.work-area label+.field{display:block;margin:5px 0 12px}
+.work-area .field{font:inherit;font-size:max(1rem,1em);min-height:48px}
+.work-area button,.work-area .btn-mini{min-height:48px}
+.work-area a.btn-mini{display:inline-flex;align-items:center}
+.skill-heading :focus-visible{outline:3px solid var(--memphis-ink);outline-offset:3px}
+.skill-heading{padding:16px 0;border-bottom:2px solid var(--memphis-ink);margin-bottom:18px}
+.skill-heading h2{font-size:26px;margin:8px 0}
+.skill-heading p{line-height:1.7}
+.skill-heading .work-tabs{margin-bottom:0}
 .work-area{max-width:780px;margin:20px auto 0}
 .work-area a{color:#285887}
 .work-tabs{display:flex;flex-wrap:wrap;gap:6px;margin:16px 0 20px;padding:5px;

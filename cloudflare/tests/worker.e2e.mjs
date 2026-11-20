@@ -266,6 +266,11 @@ const check = (name, cond, extra = "") => {
   check("显示注销入口", r.text.includes("注销账户") && r.text.includes('id="del"'));
   check("显示邮箱", r.text.includes(email));
 
+  const skillSettings = await call("/skills/yds", { headers: { Cookie: `yds_sid=${sid}` } });
+  check("内置 Skill 有独立设置入口", skillSettings.status === 200 && skillSettings.text.includes('aria-label="Skill 设置"'));
+  const skillHub = await call("/skills", { headers: { Cookie: `yds_sid=${sid}` } });
+  check("未配置网站组时仍可打开内置 Skill 入口", skillHub.status === 200 && skillHub.text.includes('/skills/yds'));
+
   console.log("\n[7] /dashboard 鉴权");
   r = await call("/dashboard");
   check("无会话 302 回首页", r.status === 302 && r.headers.get("location") === "/");

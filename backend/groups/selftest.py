@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from .probe import Blocked, SiteProbe, request_page
-from .runner import DEFAULT_MONITOR_PROMPT, scan, skill_candidate
+from .runner import DEFAULT_MONITOR_PROMPT, run, scan, skill_candidate
 
 
 def main():
@@ -78,6 +78,23 @@ def main():
         }
         compared = ai.call_args.kwargs["examples"][0]
         assert compared["baseline"] == changes[0]["summary"] and compared["proposed"] == improved["summary"]
+    # A normal deployment already has a shared machine credential; no second secret is required.
+    from dataclasses import replace
+    from .runner import settings
+    with patch("backend.groups.runner.settings", replace(settings, subscribe_api_token="shared-token", workers_dev_url="https://notify.example.org")), \
+            patch.dict("os.environ", {"GROUP_RUNNER_TOKEN": ""}), \
+            patch("backend.groups.runner.requests.Session") as session, \
+            patch("backend.groups.runner.AiClient"):
+        session.return_value.__enter__.return_value.headers = {}
+        session.return_value.__enter__.return_value.get.return_value.status_code = 200
+        session.return_value.__enter__.return_value.get.return_value.json.return_value = {"groups": []}
+        session.return_value.__enter__.return_value.post.return_value.status_code = 200
+        session.return_value.__enter__.return_value.post.return_value.json.return_value = {"sent": 0}
+        run()
+        assert session.return_value.__enter__.return_value.headers["Authorization"] == "Bearer shared-token"
+        with patch.dict("os.environ", {"GROUP_RUNNER_TOKEN": "dedicated-token"}):
+            run()
+            assert session.return_value.__enter__.return_value.headers["Authorization"] == "Bearer dedicated-token"
     print("通知组抓取自测通过")
 
 

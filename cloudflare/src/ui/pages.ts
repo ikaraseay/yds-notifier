@@ -2,6 +2,7 @@
 
 import { AUDIENCES, CATEGORIES, CONTESTS, type Frequency, type User } from "../accounts/auth";
 import { esc } from "../platform/security";
+import { skillSettingsHeader } from "./skill-settings";
 import { page } from "./layout";
 import { LOGIN_SCRIPT, PREFS_SCRIPT } from "./scripts";
 
@@ -115,7 +116,7 @@ export function dashboardPage(user: User, calendarUrl = "", wechat?: WechatServi
   return page({
     title: "控制台",
     heading: "通知<em>设置</em>",
-    body: `<p><a href="/groups">我的通知组与公开目录</a></p>
+    body: `${skillSettingsHeader("研电赛", "官方赛事通知、赛程与个人日历，按你的角色和关注范围推送。", "内置 Skill", true)}<p><a href="/groups">我的通知组与公开目录</a></p>
       <p class="sub">改动会自动保存，最迟 5 分钟后生效。</p>
       <div class="who" id="who">
         <span>${esc(user.email)}</span>
@@ -126,8 +127,9 @@ export function dashboardPage(user: User, calendarUrl = "", wechat?: WechatServi
         没收到的话，先看看垃圾箱。
         <button type="button" id="resend" class="btn-secondary btn-gap">重新发送确认邮件</button>
       </div>` : ""}
+      <section id="skill-sources" class="section"><h2>监控来源</h2><p>研创网赛事专区、大赛通知与中国电子学会公告，由内置 Skill 维护。</p></section>
       <div id="settings" data-email="${esc(user.email)}" data-apply-delay="${PREFS_APPLY_DELAY_MS}">
-        <div class="section section--first">
+        <div class="section section--first" id="skill-rules">
           <h2>我的角色</h2>
           <p class="sub hint">
             学生看报名与提交，导师看评审与决赛，培养单位看审核与承办。可多选，按所选角色的合集推送。
@@ -155,7 +157,7 @@ export function dashboardPage(user: User, calendarUrl = "", wechat?: WechatServi
         </div>
       </div>
       <div class="section">
-        <h2>推送频率</h2>
+        <h2 id="skill-delivery">推送频率</h2>
         <p class="sub hint">
           不想被频繁打扰？改成日报或周报，同一时段的通知会合并成一封。
         </p>

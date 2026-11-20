@@ -9,7 +9,7 @@
     "build": "esbuild src/index.ts --bundle --format=esm --platform=browser --target=es2022 --outfile=dist/index.js --minify --legal-comments=none --loader:.css=text",
     "build:test": "esbuild src/index.ts --bundle --format=esm --platform=neutral --target=es2022 --outfile=dist/worker.test.mjs --legal-comments=none --loader:.css=text",
     "typecheck": "tsc --noEmit",
-    "test": "npm run build:test && node tests/worker.e2e.mjs",
+    "test": "npm run build:test && node tests/worker.e2e.mjs && node tests/groups.e2e.mjs",
     "check": "npm run typecheck && npm test",
     "dev": "npm run sync-config && npm run build && wrangler dev",
     "deploy": "npm run sync-config && npm run build && wrangler deploy",

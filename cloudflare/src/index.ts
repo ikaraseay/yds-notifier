@@ -21,6 +21,7 @@ import {
 import { handleUnsubscribe } from "./accounts/unsubscribe";
 import { handleResendWebhook } from "./mail/webhook";
 import { handleGroupAdmin } from "./groups/admin";
+import { handleSkills } from "./skills/handler";
 import { handleGroups } from "./groups/handler";
 import { handleGroupRunner } from "./groups/runner";
 import { methodNotAllowed } from "./platform/security";
@@ -74,6 +75,11 @@ export default {
       if (p === "/calendar.ics") {
         if (m !== "GET" && m !== "HEAD") return methodNotAllowed("GET, HEAD");
         return handleCalendar(req, env);
+      }
+
+      if (p === "/skills") {
+        if (m !== "GET") return methodNotAllowed("GET");
+        return await handleSkills(req, env);
       }
 
       // ---- 管理后台及机器接口 ------------------------------------------------------
@@ -142,7 +148,7 @@ export default {
         return handleConfirmResend(req, env);
       }
 
-      if (p === "/dashboard") {
+      if (p === "/dashboard" || p === "/skills/yds") {
         if (m !== "GET") return methodNotAllowed("GET");
         const email = await getSession(env.SUBS, readSessionToken(req));
         if (!email) return redirect("/");

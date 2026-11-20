@@ -117,12 +117,6 @@ jobs:
             python -m backend --skill yds
           fi
 
-      - name: 检查 MeoNotifier 通知组
-        if: ${{ !cancelled() && github.event.inputs.mode != 'check' }}
-        env:
-          GROUP_RUNNER_TOKEN: ${{ secrets.GROUP_RUNNER_TOKEN }}
-        run: python -m backend.group_runner
-
       # 成功心跳：配合外部 dead-man switch（Healthchecks / UptimeRobot / Better Stack），
       # 「该来没来」就会告警，能同时覆盖 Actions 被 60 天规则禁用、抓取静默停摆等情况。
       - name: 成功心跳

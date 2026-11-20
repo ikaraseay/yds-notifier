@@ -47,9 +47,7 @@ jobs:
 
       - name: 端到端测试
         working-directory: cloudflare
-        run: |
-          npm test
-          node tests/groups.e2e.mjs
+        run: npm test
 
       - name: 构建 dist/index.js
         working-directory: cloudflare

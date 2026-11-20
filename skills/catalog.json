@@ -1,0 +1,36 @@
+[
+  {
+    "id": "yds",
+    "name": "研电赛",
+    "version": 1,
+    "kind": "builtin",
+    "description": "报名、评审、决赛与赛程提醒，按角色和赛事筛选。",
+    "settingsUrl": "/skills/yds",
+    "monitorPrompt": "按角色、赛事和通知栏目筛选官方赛事更新。",
+    "sources": []
+  },
+  {
+    "id": "web-monitor",
+    "name": "网站更新",
+    "version": 1,
+    "kind": "template",
+    "description": "为一组公开网站设置监控意图，试抓后接收更新摘要。",
+    "sources": []
+  },
+  {
+    "id": "research",
+    "name": "科研通知",
+    "version": 1,
+    "kind": "template",
+    "description": "汇总桂电、广西教育厅和科技厅的项目申报、科研与研究生通知。",
+    "monitorPrompt": "关注新增的科研项目申报、基金、研究生培养和教学通知，以及申报条件、截止日期、材料或安排的实质变化。摘要写明通知标题、适用对象、截止时间与原文明确的办理事项；忽略导航和排版变化。",
+    "sources": [
+      "https://www.guet.edu.cn/jwc/",
+      "https://www.guet.edu.cn/gdkyc/626/list.htm",
+      "https://www.guet.edu.cn/gra/_t14/540/list.htm",
+      "https://www.guet.edu.cn/nyy/",
+      "http://jyt.gxzf.gov.cn/zfxxgk/fdzdgknr/tzgg_58179/",
+      "http://kjt.gxzf.gov.cn/dtxx_59340/tzgg/"
+    ]
+  }
+]

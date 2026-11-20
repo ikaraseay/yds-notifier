@@ -1,9 +1,10 @@
 import { getSession, getUser, readSessionToken } from "../accounts/auth";
-import type { Env } from "../platform/env";
+import { groupRunnerToken, type Env } from "../platform/env";
 import { readForm, redirect, sameOrigin } from "../platform/http";
 import { groupErrorPage, groupsPage } from "../ui/groups";
 import { loadGroup, parseConfig } from "./repository";
 import type { GroupRow, Skill } from "./types";
+import { findSkill } from "../skills/catalog";
 
 const CONTROL = /[\u0000-\u001f\u007f]/;
 
@@ -35,7 +36,7 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
       ) ORDER BY g.id`).bind(email, email).all<GroupRow>(),
       db.prepare("SELECT group_id,frequency FROM group_subscriptions WHERE email=?").bind(email).all<{group_id: string; frequency: string}>(),
     ]);
-    return groupsPage(email, groups.results, new Map(subs.results.map(s => [s.group_id, s.frequency])), canCreate, new URL(req.url), Boolean(env.GROUP_RUNNER_TOKEN));
+    return groupsPage(email, groups.results, new Map(subs.results.map(s => [s.group_id, s.frequency])), canCreate, new URL(req.url), Boolean(groupRunnerToken(env)), Number(await env.SUBS.get("meta:group-runner:last-seen")) || 0);
   }
   if (!sameOrigin(req)) return groupErrorPage("请求来源无效。", 403);
   const form = await readForm(req, 16000);
@@ -52,11 +53,17 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
     if (!canCreate) return groupErrorPage("创建权限由管理员授予。", 403);
     const name = (form.get("name") || "").trim();
     if (!name || name.length > 80 || CONTROL.test(name)) return groupErrorPage("请输入有效的组名。");
+    const template = findSkill(form.get("template") || "web-monitor");
+    if (!template || template.kind !== "template") return groupErrorPage("未知通知 Skill 模板。");
+    const config = {
+      name, templateId: template.id, enabled: false, frequency: "instant", guidance: template.summaryGuidance,
+      sources: template.sources.map(url => ({ url: inputUrl(url), prompt: template.monitorPrompt })),
+    };
     const groupId = crypto.randomUUID();
     const result = await db.prepare(`INSERT INTO notification_groups (id, owner, draft)
       SELECT ?,?,? WHERE EXISTS (SELECT 1 FROM group_creators WHERE email=?)
       AND (SELECT COUNT(*) FROM notification_groups WHERE owner=?) < 10`)
-      .bind(groupId, email, JSON.stringify({ name, sources: [], enabled: false }), email, email).run();
+      .bind(groupId, email, JSON.stringify(config), email, email).run();
     return result.meta.changes ? back("mine", groupId) : groupErrorPage("已达到 10 个通知组的上限，或创建权限已收回。", 409);
   }
   if (action === "unsubscribe") {
@@ -82,6 +89,25 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
   let { visibility, published, skill, review_note } = row;
   const statements: D1PreparedStatement[] = [];
   switch (action) {
+    case "probe": {
+      if (!groupRunnerToken(env)) return fail("试抓服务尚未启用，请联系管理员。", 503);
+      const index = form.get("index");
+      const sources = index === null ? draft.sources : /^\d+$/.test(index) && draft.sources[Number(index)] ? [draft.sources[Number(index)]] : [];
+      if (!sources.length) return fail("请先添加有效网址。");
+      for (const source of sources) {
+        source.status = undefined;
+        source.checked = undefined;
+        source.detail = "已排队，等待下一轮试抓。";
+      }
+      break;
+    }
+    case "settings": {
+      const guidance = (form.get("guidance") || "").trim();
+      if (guidance.length > 600) return fail("摘要规则最多 600 字。");
+      draft.frequency = frequency(form.get("frequency"));
+      draft.guidance = guidance;
+      break;
+    }
     case "rename": {
       const name = (form.get("name") || "").trim();
       if (!name || name.length > 80 || CONTROL.test(name)) return fail("请输入有效的组名。");
@@ -128,7 +154,7 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
       if (published) published = JSON.stringify({ ...parseConfig(published), enabled: false });
       break;
     case "request-public":
-      if (!env.GROUP_RUNNER_TOKEN) return fail("试抓服务尚未启用，暂时无法提交公开审核。", 503);
+      if (!groupRunnerToken(env)) return fail("试抓服务尚未启用，暂时无法提交公开审核。", 503);
       if (form.get("confirm") !== "yes" || !draft.sources.length ||
           draft.sources.some(source => source.status !== "ready" || !source.prompt)) {
         return fail("请确认邮箱展示，并为每个成功试抓的网址填写提示词。");
@@ -172,7 +198,7 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
     statements.push(db.prepare(`DELETE FROM group_deliveries WHERE group_id=? AND shared=1 AND sent IS NULL AND EXISTS (
       SELECT 1 FROM notification_groups WHERE id=? AND revision=?)`).bind(id, id, row.revision));
   }
-  if (["add", "prompt", "remove-source", "rename"].includes(action) && visibility === "pending") {
+  if (["add", "prompt", "remove-source", "rename", "settings", "probe"].includes(action) && visibility === "pending") {
     visibility = published ? "public" : "private";
     review_note = "内容已修改，请重新提交公开审核。";
   }

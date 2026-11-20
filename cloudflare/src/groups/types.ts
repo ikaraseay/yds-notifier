@@ -8,7 +8,7 @@ export type Source = {
   checked?: number;
 };
 
-export type GroupConfig = { name: string; sources: Source[]; enabled: boolean };
+export type GroupConfig = { name: string; sources: Source[]; enabled: boolean; templateId?: string; frequency?: "instant" | "daily" | "weekly"; guidance?: string };
 export type GroupRow = {
   id: string;
   owner: string;
