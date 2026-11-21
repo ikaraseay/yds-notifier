@@ -101,6 +101,7 @@ export const PREFS_SCRIPT = `
   var storeKey = 'yds:pendingPrefs:' + email;
   var timer = null;
   var stagedAt = 0;
+  var saving = false;
   var bar = document.getElementById('applybar');
   var barText = document.getElementById('applytext');
 
@@ -160,6 +161,9 @@ export const PREFS_SCRIPT = `
   }
 
   function commit() {
+    if (saving) return;
+    saving = true;
+    if (applyNow) { applyNow.disabled = true; applyNow.textContent = "保存中…"; }
     if (timer) { clearTimeout(timer); timer = null; }
     var payload = JSON.stringify(collect());
     fetch('/api/prefs', {
@@ -167,7 +171,13 @@ export const PREFS_SCRIPT = `
       headers: { 'Content-Type': 'application/json' },
       body: payload
     }).then(function (r) { return r.json(); }).then(function (d) {
-      if (d.ok) { clearStash(); feedback('ok', '设置已生效，下一次推送按新设置发送'); return; }
+      if (d.ok) {
+        if (JSON.stringify(collect()) !== payload) {
+          showBar('之前的修改已保存，新的修改等待保存');
+          schedule();
+        } else { clearStash(); feedback('ok', '设置已生效，下一次推送按新设置发送'); }
+        return;
+      }
       if (d.login) { feedback('err', '登录已过期，请重新进入'); return; }
       // 失败时保留暂存并重试；服务端幂等，重复提交不会产生额外写入
       showBar(d.message || '保存失败，稍后自动重试');
@@ -177,6 +187,9 @@ export const PREFS_SCRIPT = `
       showBar('网络异常，稍后自动重试');
       stagedAt = Date.now();
       schedule();
+    }).then(function () {
+      saving = false;
+      if (applyNow) { applyNow.disabled = false; applyNow.textContent = '保存并生效'; }
     });
   }
 
@@ -233,6 +246,19 @@ export const PREFS_SCRIPT = `
     });
   });
 
+  var contestSearch = document.getElementById('contest-search');
+  var contestSearchState = document.getElementById('contest-search-state');
+  if (contestSearch) contestSearch.addEventListener('input', function () {
+    var query = contestSearch.value.trim().toLowerCase();
+    var visible = 0;
+    contestBoxes.forEach(function (el) {
+      var matches = el.value.toLowerCase().includes(query);
+      el.closest('.opt').hidden = !matches;
+      if (matches) visible += 1;
+    });
+    if (contestSearchState) contestSearchState.textContent = query ? (visible ? '找到 ' + visible + ' 项赛事，已选项保持不变' : '没有匹配的赛事，请换个关键词') : '';
+  });
+
   var clearPause = document.getElementById('clearPause');
   if (clearPause && pause) clearPause.addEventListener('click', function () {
     pause.value = '';
@@ -252,15 +278,6 @@ export const PREFS_SCRIPT = `
         feedback('err', '网络出了点问题，请稍后再试');
         resend.disabled = false;
       });
-  });
-
-  var out = document.getElementById('logout');
-  if (out) out.addEventListener('click', function () {
-    fetch('/api/logout', { method: 'POST' }).then(function () {
-      location.href = '/';
-    }).catch(function () {
-      location.href = '/';
-    });
   });
 
   var copyCal = document.getElementById('copyCal');

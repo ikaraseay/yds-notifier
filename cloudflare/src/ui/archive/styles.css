@@ -51,7 +51,7 @@ a { color: inherit; }
 .header h1 { font-size: 36px; font-weight: 800; letter-spacing: -0.5px; line-height: 1.25; }
 .header h1 .hl {
   background: var(--coral);
-  color: #fff;
+  color: var(--ink);
   padding: 2px 12px;
   border-radius: 4px;
   display: inline-block;
@@ -498,3 +498,10 @@ a { color: inherit; }
 }
 .foot-links a:hover { border-bottom-style: solid; }
 .foot-links span { margin: 0 5px; color: #bdb3a4; }
+
+:where(a,summary):focus-visible{outline:3px solid #235dcc;outline-offset:3px}
+@media(pointer:coarse){.vt,.fb,.tw,.cnav,.cpick>summary,.ebtn{min-height:44px;display:inline-flex;align-items:center;justify-content:center}}
+@media(forced-colors:active){:root{--bg:Canvas;--card:Canvas;--ink:CanvasText;--meta:CanvasText;--line:CanvasText;--blue:LinkText;--yellow:Canvas;--coral:CanvasText}.fb.act,.vt.act{outline:2px solid Highlight}}
+
+.header .nav a,.nt a,.srcbar a,.footer a,.ebtn,.mr .ctg,.cm.has{color:#285887}
+@media(forced-colors:active){.header .nav a,.nt a,.srcbar a,.footer a,.ebtn,.mr .ctg,.cm.has{color:LinkText}}

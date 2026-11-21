@@ -44,9 +44,13 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
   if (!form || !action) return groupErrorPage("表单无效。");
   const id = form.get("id") || "";
   const back = (view = "mine", group = "") => {
+    if (form.get("return") === "overview" && ["pause", "enable", "probe"].includes(action)) {
+      return redirect(`/skills?done=${encodeURIComponent(action)}`, undefined, 303);
+    }
     const params = new URLSearchParams({ view, done: action });
     if (group) params.set("id", group);
-    return redirect(`/groups?${params}`, undefined, 303);
+    const section = action === "settings" ? "#skill-delivery" : action === "prompt" ? "#source-" + Number(form.get("index")) : ["add", "probe", "remove-source"].includes(action) ? "#skill-sources" : "";
+    return redirect(`/groups?${params}${section}`, undefined, 303);
   };
   const subscriptionView = form.get("view") === "subscribed" ? "subscribed" : "directory";
   if (action === "create") {

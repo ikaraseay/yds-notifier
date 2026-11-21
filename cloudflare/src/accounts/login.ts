@@ -234,7 +234,7 @@ export async function handleMagicVerify(url: URL, env: Env): Promise<Response> {
   }
 
   const token = await createSession(env.SUBS, email);
-  return redirect("/dashboard", sessionCookie(token));
+  return redirect("/skills", sessionCookie(token));
 }
 
 /** GET /confirm?c= —— 存量「待确认」用户点旧邮件里的链接，完成订阅确认（兼容路径） */

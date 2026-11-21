@@ -123,7 +123,7 @@ export default {
         const email = await getSession(env.SUBS, readSessionToken(req));
         if (email) {
           const user = await getUser(env.SUBS, email);
-          if (user) return dashboardPage(user, await personalCalendarUrl(env, user.email), wechat);
+          if (user) return await handleSkills(req, env);
         }
         return loginPage(cfg.siteName, await getCount(env), url.searchParams.get("deleted") === "1", wechat);
       }

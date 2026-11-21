@@ -60,14 +60,13 @@ function formatStamp(iso: string | undefined): string {
 /** 页头：标题 + 说明 + 快捷入口。 */
 function renderHeader(hasFilter: boolean): string {
   return `<header class="header">
-    <div class="dot"></div>
     <h1>研电赛<span class="hl">通知</span></h1>
     <p class="sub">中国研究生创新实践系列大赛 · 官方通知聚合</p>
-    <div class="nav">
-      <a href="/">控制台 / 个人日历</a><a href="/feed.xml">RSS 订阅</a>${
+    <nav class="nav" aria-label="归档导航">
+      <a href="/skills">通知工作台</a><a href="/skills/yds">个人日历设置</a><a href="/feed.xml">RSS 订阅</a>${
         hasFilter ? '<a href="/archive">清除筛选</a>' : ''
       }
-    </div>
+    </nav>
   </header>`;
 }
 

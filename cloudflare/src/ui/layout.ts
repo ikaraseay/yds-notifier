@@ -2,6 +2,7 @@
 
 import { csp, esc, newNonce, securityHeaders } from "../platform/security";
 import { siteFooter } from "./footer";
+import { workspaceShell, WORKSPACE_SCRIPT, type Workspace } from "./workspace";
 import { CSS } from "./styles";
 
 export interface PageOpts {
@@ -15,11 +16,13 @@ export interface PageOpts {
   script?: string;
   wechatImages?: boolean;
   wide?: boolean;
+  workspace?: Workspace;
 }
 
-export function page({ title, heading, body, extra = "", script = "", wechatImages = false, wide = false }: PageOpts, status = 200): Response {
+export function page({ title, heading, body, extra = "", script = "", wechatImages = false, wide = false, workspace }: PageOpts, status = 200): Response {
   const nonce = newNonce();
-  const hasScript = Boolean(script);
+  const scripts = [workspace ? WORKSPACE_SCRIPT : "", script].filter(Boolean).join("\n");
+  const hasScript = Boolean(scripts);
   const safeHeading = esc(heading)
     .replace(/&lt;\/em&gt;/g, "</em>")
     .replace(/&lt;em&gt;/g, "<em>");
@@ -27,14 +30,14 @@ export function page({ title, heading, body, extra = "", script = "", wechatImag
   const html = `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>${esc(title)}</title><link rel="icon" type="image/svg+xml" href="/favicon.svg"><meta name="robots" content="noindex">
-<style nonce="${nonce}">${CSS}</style></head><body>
-<div class="card${wide ? " card--wide" : ""}">
+<style nonce="${nonce}">${CSS}</style></head><body${workspace ? ' class="workspace-body"' : ""}>
+${workspace ? workspaceShell(workspace, safeHeading, body + extra) : `<div class="card${wide ? " card--wide" : ""}">
   <div class="mark"></div>
   <h1>${safeHeading}</h1>
   ${body}
   ${extra}
-</div>
-${siteFooter()}${hasScript ? `<script nonce="${nonce}">${script}</script>` : ""}</body></html>`;
+</div>`}
+${siteFooter()}${hasScript ? `<script nonce="${nonce}">${scripts}</script>` : ""}</body></html>`;
 
   return new Response(html, {
     status,

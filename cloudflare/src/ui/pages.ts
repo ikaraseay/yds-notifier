@@ -49,8 +49,9 @@ export function loginPage(site: string, count: number, deleted = false, wechat?:
       <div class="count">已有 ${count} 人订阅研电赛</div>
       ${deleted ? `<div class="alert ok" role="status">账号已注销，订阅记录也已删除。</div>` : ""}
       <form id="f">
+        <label for="email">邮箱地址</label>
         <input type="email" id="email" name="email" placeholder="你的邮箱地址"
-               autocomplete="email" required maxlength="254">
+               autocomplete="email" autocorrect="off" autocapitalize="none" spellcheck="false" required maxlength="254">
         <button type="submit" id="btn">发送登录邮件</button>
         <div id="msg" role="status" aria-live="polite"></div>
       </form>`,
@@ -114,14 +115,12 @@ export function dashboardPage(user: User, calendarUrl = "", wechat?: WechatServi
     .join("");
 
   return page({
-    title: "控制台",
-    heading: "通知<em>设置</em>",
-    body: `${skillSettingsHeader("研电赛", "官方赛事通知、赛程与个人日历，按你的角色和关注范围推送。", "内置 Skill", true)}<p><a href="/groups">我的通知组与公开目录</a></p>
-      <p class="sub">改动会自动保存，最迟 5 分钟后生效。</p>
-      <div class="who" id="who">
-        <span>${esc(user.email)}</span>
-        <a href="#" id="logout">退出登录</a>
-      </div>
+    title: "研电赛通知设置",
+    heading: "研电赛通知设置",
+    workspace: { active: "settings", email: user.email },
+    body: `${skillSettingsHeader("研电赛", "官方赛事通知、赛程与个人日历，按你的角色和关注范围推送。", "内置 Skill", true)}
+      <p class="sub">修改后点击“保存并生效”，也会在 5 分钟后自动保存。</p>
+
       ${pending ? `<div class="alert err" id="pending-box" role="status">
         还差一步：确认邮件已发到 <b>${esc(user.email)}</b>，点里面的链接后才开始收通知。
         没收到的话，先看看垃圾箱。
@@ -144,8 +143,9 @@ export function dashboardPage(user: User, calendarUrl = "", wechat?: WechatServi
           <div class="row-actions">
             <button type="button" class="btn-mini" data-contest-preset="core">只选研电赛</button>
             <button type="button" class="btn-mini" data-contest-preset="all">全选</button>
-            <button type="button" class="btn-mini" data-contest-preset="none">清空</button>
+            <button type="button" class="btn-mini" data-contest-preset="none">不限赛事</button>
           </div>
+          <label for="contest-search">搜索赛事</label><input type="search" id="contest-search" class="field" placeholder="输入赛事名称" autocomplete="off"><p id="contest-search-state" class="sub" role="status"></p>
           <div id="contest-opts" class="contest-grid">${contestOpts}</div>
         </div>
         <div class="section">
@@ -157,7 +157,7 @@ export function dashboardPage(user: User, calendarUrl = "", wechat?: WechatServi
         </div>
       </div>
       <div class="section">
-        <h2 id="skill-delivery">推送频率</h2>
+        <h2 id="skill-delivery">通知设置</h2><label for="frequency">推送频率</label>
         <p class="sub hint">
           不想被频繁打扰？改成日报或周报，同一时段的通知会合并成一封。
         </p>
@@ -168,14 +168,14 @@ export function dashboardPage(user: User, calendarUrl = "", wechat?: WechatServi
         <p class="sub hint">
           在这个日期之前不发信。暂停期间攒下的通知，会在恢复后的第一封里补上。
         </p>
-        <input type="date" id="pausedUntil" class="field" aria-label="暂停至"
+        <label for="pausedUntil">暂停至（含当天）</label><input type="date" id="pausedUntil" class="field" aria-label="暂停至"
                value="${esc(user.prefs.pausedUntil || "")}">
         <button type="button" id="clearPause" class="btn-secondary btn-gap">清除暂停</button>
       </div>
       <div id="msg" role="status" aria-live="polite"></div>
       <div id="applybar" class="applybar" aria-live="polite">
         <span id="applytext">有未保存的更改</span>
-        <button type="button" id="applyNow" class="btn-mini">立即生效</button>
+        <button type="button" id="applyNow" class="btn-mini">保存并生效</button>
       </div>
       <div class="section">
         <h2>我的日历</h2>
@@ -193,11 +193,11 @@ export function dashboardPage(user: User, calendarUrl = "", wechat?: WechatServi
           ? ` · <a href="${esc(calendarUrl)}">加入日历</a>` : ""}
       </div>
       ${wechatSection(wechat)}
-      <div class="danger">
+      <details class="danger"><summary>账号操作</summary>
         <h2>注销账户</h2>
         <p>将删除账号、订阅记录和全部设置，之后不再收到任何邮件，且无法恢复。</p>
         <button type="button" id="del" class="btn-danger">注销账户</button>
-      </div>`,
+      </details>`,
     wechatImages: Boolean(wechat?.name && wechat.qrUrl),
     script: PREFS_SCRIPT,
   });

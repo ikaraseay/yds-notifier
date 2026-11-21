@@ -1,3 +1,4 @@
+import { testPreferencesInteraction } from "./ui-behavior.mjs";
 /**
  * Worker 端到端测试（在 Node 里跑，替换掉 KV / DO / fetch 三类外部依赖）
  *   npm test   （会先用 esbuild 生成 dist/worker.test.mjs）
@@ -214,7 +215,7 @@ const check = (name, cond, extra = "") => {
   console.log("\n[4] 点魔法链接 → 注册 + 建会话");
   const mp = magicPathOf(email);
   r = await call(mp);
-  check("302 到控制台", r.status === 302 && r.headers.get("location") === "/dashboard", r.status);
+  check("登录后进入工作台", r.status === 302 && r.headers.get("location") === "/skills", r.status);
   const sid = sidOf(r);
   check("下发会话 cookie", sid.length === 64, sid);
   const cookie = r.headers.get("set-cookie") || "";
@@ -258,7 +259,8 @@ const check = (name, cond, extra = "") => {
 
   console.log("\n[6] 已登录进控制台");
   r = await call("/", { headers: { Cookie: `yds_sid=${sid}` } });
-  check("首页直接进控制台", r.status === 200 && r.text.includes("通知<em>设置</em>"), r.text.slice(0, 200));
+  check("首页直接进入通知工作台", r.status === 200 && r.text.includes("<h1>工作台</h1>") && r.text.includes("我的网站组"), r.text.slice(0, 200));
+  r = await call("/skills/yds", { headers: { Cookie: `yds_sid=${sid}` } });
   check(
     "显示四个栏目",
     ["报名参赛", "评审与名单", "决赛与收官", "赛事动态"].every((k) => r.text.includes(k)),
@@ -268,6 +270,8 @@ const check = (name, cond, extra = "") => {
 
   const skillSettings = await call("/skills/yds", { headers: { Cookie: `yds_sid=${sid}` } });
   check("内置 Skill 有独立设置入口", skillSettings.status === 200 && skillSettings.text.includes('aria-label="Skill 设置"'));
+  await testPreferencesInteraction(skillSettings.text);
+  check("赛事搜索不改选择，保存期间的新修改保持待保存", true);
   const skillHub = await call("/skills", { headers: { Cookie: `yds_sid=${sid}` } });
   check("未配置网站组时仍可打开内置 Skill 入口", skillHub.status === 200 && skillHub.text.includes('/skills/yds'));
 
@@ -999,7 +1003,7 @@ const check = (name, cond, extra = "") => {
     headers: { Cookie: `yds_sid=${freshSid}` },
   });
 
-  r = await call("/", { headers: { Cookie: `yds_sid=${freshSid}` } });
+  r = await call("/skills/yds", { headers: { Cookie: `yds_sid=${freshSid}` } });
   check("控制台含「我的角色」", r.text.includes("我的角色"));
   check("控制台含四类角色", ["参赛学生", "指导教师", "培养单位", "分赛区 / 承办方"]
     .every((k) => r.text.includes(k)));
@@ -1007,8 +1011,8 @@ const check = (name, cond, extra = "") => {
   check("控制台列出全部赛事", r.text.includes("智能建造创新大赛") && r.text.includes("数学建模竞赛"));
   check("控制台有快捷选择", r.text.includes("只选研电赛") && r.text.includes("全选"));
   check("控制台带 5 分钟暂存窗口", r.text.includes('data-apply-delay="300000"'), r.text.slice(0, 120));
-  check("控制台有立即生效入口", r.text.includes('id="applyNow"') && r.text.includes("立即生效"));
-  check("控制台说明改动延迟生效", r.text.includes("分钟后生效") && r.text.includes("立即生效"));
+  check("控制台有明确保存入口", r.text.includes('id="applyNow"') && r.text.includes("保存并生效"));
+  check("控制台说明改动延迟生效", r.text.includes("分钟后自动保存") && r.text.includes("保存并生效"));
   check("赛事勾选可提交", r.text.includes('name="contest" value="电子设计竞赛"'));
 
   r = await call("/api/list", { headers: { Authorization: "Bearer admin-secret" } });
@@ -1150,17 +1154,17 @@ const check = (name, cond, extra = "") => {
   check("写入后缓存已失效", env.SUBS.reads >= 1, String(env.SUBS.reads));
   check("写入后归档内容正确", r.text.includes("关于报名截止的通知"));
 
-  console.log("\n[36] 归档页新版式（Memphis 设计）");
+  console.log("\n[36] 归档页阅读版式");
 
   r = await call("/archive");
   check("归档用独立整页版式", r.text.includes('class="container"') && r.text.includes('class="header"'));
-  check("归档标题带高亮块", r.text.includes("研电赛<span class=\"hl\">通知</span>"));
+  check("归档保留孟菲斯标题", r.text.includes('研电赛<span class="hl">通知</span>'));
   check("归档有统计条", r.text.includes('class="stats"') && r.text.includes("项赛事"));
   check("归档有赛事筛选", r.text.includes("赛事筛选") && r.text.includes('class="cscr"'));
   check("归档有分类筛选", r.text.includes("通知分类"));
   check("归档有视图切换", r.text.includes("通知列表") && r.text.includes("日历视图"));
   check("归档有导出栏", r.text.includes('class="ebar"') && r.text.includes("订阅 RSS"));
-  check("归档点阵背景样式", r.text.includes("radial-gradient"));
+  check("归档保留孟菲斯点阵背景", r.text.includes("--bg: #FFF4E4") && r.text.includes("radial-gradient"));
   check("归档不引入公开日历链接", !r.text.includes('href="/calendar.ics"'));
 
   r = await call("/archive?category=" + encodeURIComponent("报名参赛"));
