@@ -44,6 +44,8 @@ export interface Env {
   // ---------- Bindings ----------
   SUBS: KVNamespace;
   GROUPS?: D1Database;
+  SKILL_QUEUE?: Queue<string>;
+  AI?: Ai;
   GROUP_RUNNER_TOKEN?: string;
   RATE: DurableObjectNamespace;
 }

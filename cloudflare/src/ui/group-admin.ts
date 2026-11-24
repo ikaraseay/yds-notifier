@@ -41,6 +41,7 @@ export function groupAdminPage(
     return `<section class="work-panel">
       <div class="work-heading"><div><h3>${esc(config.name)}</h3><p>${esc(row.owner)} · ${config.sources.length} 个网址</p></div>
         <span class="work-status">${esc(groupStatus(row))}</span></div>
+      <a href="/api/skills/${encodeURIComponent(row.id)}/sources">管理来源和分类</a> · <a href="/api/skills/${encodeURIComponent(row.id)}/suggestions">管理规则建议</a>
       ${view === "pending" ? `<p>${ready ? "网址复检通过，请核对提示词后决定是否公开。"
         : failed ? "网址复检未通过。请核对下方原因，必要时退回申请。"
         : "等待所有网址完成复检。可查看来源状态。"}</p>` : ""}
@@ -59,6 +60,7 @@ export function groupAdminPage(
       <details><summary>收回权限</summary>${form("revoke", "", "确认收回", `<input type="hidden" name="email" value="${esc(creator.email)}"><label class="work-check"><input type="checkbox" name="confirm" value="yes" required> 确认收回</label>`)}</details></div>`).join("") || "<p>暂无符合条件的授权记录。</p>"}</div>`;
   const message = Object.hasOwn(FEEDBACK, done) ? FEEDBACK[done] : "";
   return adminPage("groups", `
+    <a href="/api/skills/yds/sources">管理研电赛共享网址</a> · <a href="/api/skills/yds/suggestions">研电赛规则建议</a>
     ${tabs(GROUP_ADMIN_VIEWS.map(tab => ({ href: link(tab), text: LABELS[tab], active: view === tab })), "通知组管理")}
     ${message ? `<p class="admin-feedback" role="status">${esc(message)}</p>` : ""}
     ${runnerReady ? "" : '<p class="admin-feedback">试抓任务尚未启用。请为 Worker 和 GitHub Actions 设置相同的 GROUP_RUNNER_TOKEN。</p>'}

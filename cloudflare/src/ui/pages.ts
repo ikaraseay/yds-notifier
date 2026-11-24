@@ -126,7 +126,7 @@ export function dashboardPage(user: User, calendarUrl = "", wechat?: WechatServi
         没收到的话，先看看垃圾箱。
         <button type="button" id="resend" class="btn-secondary btn-gap">重新发送确认邮件</button>
       </div>` : ""}
-      <section id="skill-sources" class="section"><h2>监控来源</h2><p>研创网赛事专区、大赛通知与中国电子学会公告，由内置 Skill 维护。</p></section>
+      <section id="skill-sources" class="section"><h2>监控来源</h2><p>研创网赛事专区、大赛通知与中国电子学会公告。管理员也可以添加共享网址。</p><a href="/api/skills/yds/sources">查看共享监控网址</a></section>
       <div id="settings" data-email="${esc(user.email)}" data-apply-delay="${PREFS_APPLY_DELAY_MS}">
         <div class="section section--first" id="skill-rules">
           <h2>我的角色</h2>

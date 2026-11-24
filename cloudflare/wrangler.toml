@@ -38,3 +38,16 @@ class_name = "RateLimiter"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["RateLimiter"]
+
+[ai]
+binding = "AI"
+
+[[queues.producers]]
+binding = "SKILL_QUEUE"
+queue = "notification-skill-rules"
+
+[[queues.consumers]]
+queue = "notification-skill-rules"
+max_batch_size = 1
+max_retries = 4
+dead_letter_queue = "notification-skill-rules-failed"

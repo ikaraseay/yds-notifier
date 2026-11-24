@@ -5,10 +5,12 @@ import { groupErrorPage, groupsPage } from "../ui/groups";
 import { loadGroup, parseConfig } from "./repository";
 import type { GroupRow, Skill } from "./types";
 import { findSkill } from "../skills/catalog";
+import { parseLabels, readPreference } from "../skills/classification";
+import type { Preference } from "./types";
 
 const CONTROL = /[\u0000-\u001f\u007f]/;
 
-function inputUrl(raw: string): string {
+export function inputUrl(raw: string): string {
   if (raw.length > 1000 || CONTROL.test(raw)) throw new Error();
   const url = new URL(raw);
   if (!["http:", "https:"].includes(url.protocol) || url.username || url.password) throw new Error();
@@ -34,9 +36,9 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
           SELECT id FROM notification_groups WHERE published IS NOT NULL ORDER BY id LIMIT 100
         ) OR EXISTS (SELECT 1 FROM group_subscriptions WHERE group_id=g.id AND email=?))
       ) ORDER BY g.id`).bind(email, email).all<GroupRow>(),
-      db.prepare("SELECT group_id,frequency FROM group_subscriptions WHERE email=?").bind(email).all<{group_id: string; frequency: string}>(),
+      db.prepare("SELECT group_id,frequency,preference FROM group_subscriptions WHERE email=?").bind(email).all<{group_id: string; frequency: string; preference: string}>(),
     ]);
-    return groupsPage(email, groups.results, new Map(subs.results.map(s => [s.group_id, s.frequency])), canCreate, new URL(req.url), Boolean(groupRunnerToken(env)), Number(await env.SUBS.get("meta:group-runner:last-seen")) || 0);
+    return groupsPage(email, groups.results, new Map(subs.results.map(s => [s.group_id, s.frequency])), canCreate, new URL(req.url), Boolean(groupRunnerToken(env)), Number(await env.SUBS.get("meta:group-runner:last-seen")) || 0, new Map(subs.results.map(s => [s.group_id, JSON.parse(s.preference) as Preference])));
   }
   if (!sameOrigin(req)) return groupErrorPage("请求来源无效。", 403);
   const form = await readForm(req, 16000);
@@ -60,7 +62,7 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
     const template = findSkill(form.get("template") || "web-monitor");
     if (!template || template.kind !== "template") return groupErrorPage("未知通知 Skill 模板。");
     const config = {
-      name, templateId: template.id, enabled: false, frequency: "instant", guidance: template.summaryGuidance,
+      name, templateId: template.id, enabled: false, frequency: "instant", guidance: template.summaryGuidance, taxonomy: template.taxonomy,
       sources: template.sources.map(url => ({ url: inputUrl(url), prompt: template.monitorPrompt })),
     };
     const groupId = crypto.randomUUID();
@@ -79,10 +81,12 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
   }
   const row = await loadGroup(db, id);
   if (action === "subscribe" && row?.published && row.owner !== email) {
-    const result = await db.prepare(`INSERT INTO group_subscriptions(group_id,email,frequency)
-      SELECT id,?,? FROM notification_groups WHERE id=? AND published IS NOT NULL
-      ON CONFLICT(group_id,email) DO UPDATE SET frequency=excluded.frequency`)
-      .bind(email, frequency(form.get("frequency")), id).run();
+    const preference = readPreference(form, parseConfig(row.published).taxonomy);
+    if (!preference) return groupErrorPage("请在每个已有分类中至少选择一项。");
+    const result = await db.prepare(`INSERT INTO group_subscriptions(group_id,email,frequency,preference)
+      SELECT id,?,?,? FROM notification_groups WHERE id=? AND published IS NOT NULL AND revision=?
+      ON CONFLICT(group_id,email) DO UPDATE SET frequency=excluded.frequency, preference=excluded.preference`)
+      .bind(email, frequency(form.get("frequency")), JSON.stringify(preference), id, row.revision).run();
     return result.meta.changes ? back(subscriptionView) : groupErrorPage("通知组已停止公开。", 409);
   }
   if (!row || row.owner !== email) return groupErrorPage("未找到可编辑的通知组。", 404);
@@ -90,9 +94,23 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
     groupErrorPage(message, status, `/groups?view=mine&id=${encodeURIComponent(id)}`);
   if (form.get("revision") !== String(row.revision)) return fail("通知组已有更新，请重新打开后重试。", 409);
   const draft = parseConfig(row.draft);
+  if (action === "preferences") {
+    const preference = readPreference(form,draft.taxonomy);
+    if (!preference) return fail("请在每个已有分类中至少选择一项。");
+    const result = await db.prepare("UPDATE notification_groups SET owner_preference=? WHERE id=? AND owner=? AND revision=?")
+      .bind(JSON.stringify(preference),id,email,row.revision).run();
+    return result.meta.changes ? back("mine",id) : fail("配置已有更新，请刷新。",409);
+  }
   let { visibility, published, skill, review_note } = row;
   const statements: D1PreparedStatement[] = [];
   switch (action) {
+    case "taxonomy":
+      try {
+        draft.taxonomy = { roles: parseLabels(form.get("roles") || ""), types: parseLabels(form.get("types") || "") };
+      } catch {
+        return fail("每类最多 20 项，每项最多 40 字。");
+      }
+      break;
     case "probe": {
       if (!groupRunnerToken(env)) return fail("试抓服务尚未启用，请联系管理员。", 503);
       const index = form.get("index");
@@ -106,10 +124,7 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
       break;
     }
     case "settings": {
-      const guidance = (form.get("guidance") || "").trim();
-      if (guidance.length > 600) return fail("摘要规则最多 600 字。");
       draft.frequency = frequency(form.get("frequency"));
-      draft.guidance = guidance;
       break;
     }
     case "rename": {
@@ -135,17 +150,11 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
       }
       break;
     }
-    case "prompt":
     case "remove-source": {
       const index = form.get("index") || "";
       const source = /^\d+$/.test(index) ? draft.sources[Number(index)] : undefined;
       if (!source) return fail("未找到这个网址。");
-      if (action === "remove-source") draft.sources.splice(Number(index), 1);
-      else {
-        const prompt = (form.get("prompt") || "").trim();
-        if (!prompt || prompt.length > 600) return fail("提示词须为 1 至 600 字。");
-        source.prompt = prompt;
-      }
+      draft.sources.splice(Number(index), 1);
       break;
     }
     case "enable":
@@ -202,7 +211,7 @@ export async function handleGroups(req: Request, env: Env): Promise<Response> {
     statements.push(db.prepare(`DELETE FROM group_deliveries WHERE group_id=? AND shared=1 AND sent IS NULL AND EXISTS (
       SELECT 1 FROM notification_groups WHERE id=? AND revision=?)`).bind(id, id, row.revision));
   }
-  if (["add", "prompt", "remove-source", "rename", "settings", "probe"].includes(action) && visibility === "pending") {
+  if (["taxonomy", "add", "prompt", "remove-source", "rename", "settings", "probe"].includes(action) && visibility === "pending") {
     visibility = published ? "public" : "private";
     review_note = "内容已修改，请重新提交公开审核。";
   }

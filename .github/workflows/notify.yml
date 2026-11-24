@@ -57,6 +57,7 @@ jobs:
       UNSUB_SECRET: ${{ secrets.UNSUB_SECRET }}
       UNSUB_TTL_DAYS: ${{ secrets.UNSUB_TTL_DAYS || '180' }}
       SUBSCRIBE_API_TOKEN: ${{ secrets.SUBSCRIBE_API_TOKEN }}
+      GROUP_RUNNER_TOKEN: ${{ secrets.GROUP_RUNNER_TOKEN || secrets.SUBSCRIBE_API_TOKEN }}
       # 归档 / RSS / 日历的数据同步；NOTICES_API_URL 不填时自动派生
       NOTICES_API_URL: ${{ secrets.NOTICES_API_URL }}
       PUBLISH_NOTICES: ${{ secrets.PUBLISH_NOTICES || 'true' }}

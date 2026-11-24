@@ -5,6 +5,8 @@ import { jsonResp } from "../platform/http";
 import { esc, safeEqual } from "../platform/security";
 import { loadGroup, parseConfig } from "./repository";
 import type { Change, GroupConfig, Skill } from "./types";
+import type { Preference } from "./types";
+import { allNotices, labelsIn, matches, matchSql } from "../skills/classification";
 
 const HOUR = 3600000;
 const WAIT = 6 * HOUR;
@@ -45,9 +47,16 @@ export async function handleGroupRunner(req: Request, env: Env): Promise<Respons
   if (!safeEqual(bearer, `Bearer ${groupRunnerToken(env)}`)) return jsonResp({ message: "unauthorized" }, 401);
   const now = Date.now();
   if (req.method === "GET") {
+    if (new URL(req.url).searchParams.get("notices") === "yds") {
+      const result = await db.prepare(`SELECT n.id,n.recorded,n.payload FROM skill_notices n JOIN notification_groups g ON g.id=n.group_id
+        WHERE g.id='yds' AND json_extract(g.draft,'$.enabled')=1 AND EXISTS (SELECT 1 FROM json_each(g.draft,'$.sources') source
+        WHERE json_extract(source.value,'$.url')=json_extract(n.payload,'$.url'))
+        AND n.recorded>=? ORDER BY n.recorded DESC LIMIT 100`).bind(now - 7 * 24 * HOUR).all();
+      return jsonResp({ notices: result.results });
+    }
     await env.SUBS.put("meta:group-runner:last-seen", String(now), { expirationTtl: 86400 });
     const rows = await db.prepare(`SELECT id,revision,visibility,draft,published,skill
-      FROM notification_groups WHERE next_check<=?
+      FROM notification_groups WHERE next_check<=? AND (id!='yds' OR json_array_length(draft,'$.sources')>0)
       AND (published IS NOT NULL OR visibility='pending' OR json_extract(draft,'$.enabled')=1 OR EXISTS (
         SELECT 1 FROM json_each(draft,'$.sources') WHERE json_extract(value,'$.status') IS NULL))
       ORDER BY next_check,id LIMIT ?`).bind(now, MAX_GROUPS_PER_RUN).all();
@@ -84,7 +93,23 @@ export async function handleGroupRunner(req: Request, env: Env): Promise<Respons
     const changes: Change[] = raw.filter((item): item is Change => item && typeof item.summary === "string" &&
       config.sources.some(source => source.url === item.url && source.status === "ready")).slice(0, 10);
     if (!changes.length) continue;
-    const message = JSON.stringify(changes.map(c => ({ url: c.url, summary: c.summary.slice(0, 800) })));
+    const classified = changes.map(c => ({ url: c.url, summary: c.summary.slice(0, 800),
+      roles: labelsIn(c.roles, config.taxonomy?.roles || []), types: labelsIn(c.types, config.taxonomy?.types || []) }));
+    for (const [index, change] of changes.entries()) {
+      const day = change.eventDate;
+      if (typeof day === "string" && /^\d{4}-\d{2}-\d{2}$/.test(day) && Number.isFinite(Date.parse(day))
+        && new Date(day).toISOString().startsWith(day) && config.sources.some(s => s.url === change.url && s.sample?.includes(day))) {
+        Object.assign(classified[index], { eventDate: day });
+      }
+    }
+    const message = JSON.stringify(classified);
+    for (const change of classified) {
+      // 按内容去重：配置修订号变化不应把同一条变化再次推送。
+      const noticeId = await sha256(`${row.id}:${Number(shared)}:${change.url}:${change.summary}`);
+      statements.push(db.prepare(`INSERT OR IGNORE INTO skill_notices SELECT ?,id,?,?,? FROM notification_groups
+        WHERE id=? AND revision=?`).bind(noticeId, Number(shared), now, JSON.stringify(change), row.id, row.revision));
+    }
+    if (row.id === "yds") continue;
     const hash = await sha256(`${row.id}:${row.revision}:${Number(shared)}`);
     const subject = `[MeoNotifier] ${config.name} · 网站更新`;
     if (shared) {
@@ -92,22 +117,26 @@ export async function handleGroupRunner(req: Request, env: Env): Promise<Respons
       statements.push(db.prepare(`INSERT INTO group_deliveries(id,group_id,email,subject,body,due,shared)
         SELECT CASE WHEN s.frequency='instant' THEN ?||':'||s.email
           ELSE g.id||':'||s.email||':'||s.frequency||':'||CASE s.frequency WHEN 'daily' THEN ? ELSE ? END END,
-          g.id,s.email,?,?,CASE s.frequency WHEN 'daily' THEN ? WHEN 'weekly' THEN ? ELSE ? END,1
+          g.id,s.email,?,json_group_array(json(item.value)),CASE s.frequency WHEN 'daily' THEN ? WHEN 'weekly' THEN ? ELSE ? END,1
         FROM group_subscriptions s JOIN notification_groups g ON g.id=s.group_id
-        WHERE g.id=? AND g.revision=? AND g.published IS NOT NULL
+        JOIN json_each(?) item WHERE g.id=? AND g.revision=? AND g.published IS NOT NULL
+        AND ${matchSql("s.preference","item.value")} GROUP BY s.email
         ON CONFLICT(id) DO UPDATE SET body=json_insert(group_deliveries.body,'$[#]',json(excluded.body))
           WHERE group_deliveries.sent IS NULL AND group_deliveries.attempt_until=0`)
-        .bind(hash, deliveryTime(now, "daily"), deliveryTime(now, "weekly"), subject, message,
-          deliveryTime(now, "daily"), deliveryTime(now, "weekly"), now, row.id, row.revision));
+        .bind(hash, deliveryTime(now, "daily"), deliveryTime(now, "weekly"), subject,
+          deliveryTime(now, "daily"), deliveryTime(now, "weekly"), now, message, row.id, row.revision));
     } else {
       const frequency = draft.frequency || "instant";
+      const ownerPreference = JSON.parse(row.owner_preference || JSON.stringify(allNotices));
+      const ownerChanges = classified.filter(change => matches(change,ownerPreference));
+      if (!ownerChanges.length) continue;
       const due = deliveryTime(now, frequency);
       const deliveryId = frequency === "instant" ? hash : `${row.id}:${row.owner}:${frequency}:${due}`;
       statements.push(db.prepare(`INSERT INTO group_deliveries(id,group_id,email,subject,body,due)
         SELECT ?,id,owner,?,?,? FROM notification_groups WHERE id=? AND revision=?
         ON CONFLICT(id) DO UPDATE SET body=json_insert(group_deliveries.body,'$[#]',json(excluded.body))
           WHERE group_deliveries.sent IS NULL AND group_deliveries.attempt_until=0`)
-        .bind(deliveryId, subject, message, due, row.id, row.revision));
+        .bind(deliveryId, subject, JSON.stringify(ownerChanges), due, row.id, row.revision));
     }
   }
   let skill = row.skill;
@@ -141,16 +170,17 @@ async function deliverGroups(db: D1Database, env: Env, now: number): Promise<Res
     if (!claim.meta.changes) continue;
     const row = await loadGroup(db, delivery.group_id);
     const active = delivery.shared ? row?.published : row?.draft;
-    const subscribed = !delivery.shared || !!await db.prepare("SELECT 1 FROM group_subscriptions WHERE group_id=? AND email=?")
-      .bind(delivery.group_id, delivery.email).first();
+    const subscribed = delivery.shared ? await db.prepare("SELECT preference FROM group_subscriptions WHERE group_id=? AND email=?")
+      .bind(delivery.group_id, delivery.email).first<string>("preference") : row?.owner_preference || JSON.stringify(allNotices);
     if (!active || !row || !await getUser(env.SUBS, row.owner) || !subscribed || !parseConfig(active).enabled || !await getUser(env.SUBS, delivery.email) ||
         await isSuppressed(env.SUBS, delivery.email)) {
       await db.prepare("DELETE FROM group_deliveries WHERE id=?").bind(delivery.id).run();
       continue;
     }
     const allowed = new Set(parseConfig(active).sources.filter(source => source.status === "ready").map(source => source.url));
+    const preference = JSON.parse(subscribed) as Preference;
     const content = [...new Set((JSON.parse(delivery.body) as (Change | Change[])[]).flat()
-      .filter(change => allowed.has(change.url)).map(change => `${change.summary}\n${change.url}`))].join("\n\n");
+      .filter(change => allowed.has(change.url) && matches(change, preference)).map(change => [change.summary, [...(change.roles || []), ...(change.types || [])].join(" · "), change.url].filter(Boolean).join("\n")))].join("\n\n");
     if (!content) {
       await db.prepare("DELETE FROM group_deliveries WHERE id=?").bind(delivery.id).run();
       continue;

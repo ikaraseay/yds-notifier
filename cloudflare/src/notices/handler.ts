@@ -30,6 +30,8 @@ import { cacheControl, esc, safeEqual, securityHeaders, signEmailToken, verifyEm
 import { renderArchive, renderArchiveError } from '../ui/archive';
 import { jsonResp } from '../platform/http';
 import { page } from '../ui/layout';
+import { personalHistory } from '../skills/history';
+import { matches, ydsPreference } from '../skills/classification';
 
 /* ---------------------------- 通用清洗 ---------------------------- */
 
@@ -523,9 +525,20 @@ export async function handleCalendar(req: Request, env: Env): Promise<Response> 
   try {
     const cfg = getConfig(env);
     const prefs = ident.prefs;
-    const notices = applyPrefs(filterByUrl(await loadNotices(env), url), prefs);
+    const preference = prefs && ydsPreference(prefs);
+    const notices = applyPrefs(filterByUrl(await loadNotices(env), url), prefs)
+      .filter(notice => !preference || matches({ url: notice.url, summary: notice.summary, roles: notice.audiences?.length ? notice.audiences : AUDIENCES,
+        types: [notice.category] }, preference));
     const scopedContest = (url.searchParams.get('contest') || '').trim();
     const scopedAudience = (url.searchParams.get('audience') || '').trim();
+    if (ident.prefs && env.GROUPS && !scopedContest && !scopedAudience) {
+      for (const record of await personalHistory(env.GROUPS, ident.email)) {
+        if (!record.eventDate) continue;
+        notices.push({ uid: `skill-${record.id}`, title: record.summary, url: record.url, summary: record.summary,
+          source: record.name, category: record.types?.join("、") || "网站更新", deadline: "",
+          date: record.eventDate });
+      }
+    }
     // 订阅者关注的赛事：没有显式 contest 参数时按个人偏好收敛赛程
     const myContests = (prefs?.contests || []).filter(Boolean);
     // 赛程是赛事级数据，没有角色属性：只按赛事过滤，避免角色链接把赛程全丢掉

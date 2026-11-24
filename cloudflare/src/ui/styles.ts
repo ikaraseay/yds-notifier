@@ -63,7 +63,13 @@ dialog form{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px}dialog
 .sidebar-help{margin-top:auto;padding:18px 10px 0;border-top:1px solid var(--line)}
 .sidebar-help p{font-size:12px;margin-top:10px}
 .sidebar-help a{font-size:13px}
-.workspace-main{min-width:0}
+.workspace-main{min-width:0;background:var(--surface);--muted:#47414d}
+.workspace-shell,.workspace-sidebar,.workspace-main{min-width:0}
+.workspace-sidebar nav{min-width:0;flex-wrap:wrap}
+.workspace-sidebar nav a{white-space:normal;overflow-wrap:anywhere}
+.work-heading>*,.group-summary>*,.settings-panel>*{min-width:0}
+.work-heading form,.work-actions form{min-width:0;max-width:100%}
+.btn-mini,.button{max-width:100%;overflow-wrap:anywhere}
 .workspace-topbar{height:52px;display:flex;justify-content:space-between;gap:12px;align-items:center;padding:0 36px;background:var(--canvas);border-bottom:2px solid var(--ink);font-size:14px;color:var(--muted)}
 .account-actions{display:flex;align-items:center;gap:16px;min-width:0}
 .logout-button{box-shadow:none;border:1px solid var(--ink);padding:4px 8px;min-height:36px;font-size:13px;color:var(--muted)}
@@ -272,6 +278,8 @@ dialog form{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px}dialog
 .applybar.on{bottom:8px;flex-wrap:wrap}
 .applybar span{flex-basis:180px}
 h1{font-size:25px}}
+.workspace-main p{font-size:1rem}
+.workspace-main :is(small,.sub,.detail,.tip){font-size:.875rem}
 @media(pointer:coarse){button,.button,.btn-mini,.btn-secondary,.source-tools .btn-mini{min-height:48px}
 summary{min-height:44px;padding-block:6px}}
 @media(prefers-reduced-motion:reduce){*{scroll-behavior:auto!important;animation:none!important;transition:none!important}}

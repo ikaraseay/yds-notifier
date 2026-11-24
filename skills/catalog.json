@@ -20,6 +20,7 @@
   {
     "id": "research",
     "name": "科研通知",
+    "taxonomy": {"roles":["教师","科研管理人员","研究生"],"types":["项目申报","基金通知","研究生培养","教学通知"]},
     "version": 1,
     "kind": "template",
     "description": "汇总桂电、广西教育厅和科技厅的项目申报、科研与研究生通知。",

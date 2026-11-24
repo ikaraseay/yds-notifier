@@ -22,6 +22,10 @@ import { handleUnsubscribe } from "./accounts/unsubscribe";
 import { handleResendWebhook } from "./mail/webhook";
 import { handleGroupAdmin } from "./groups/admin";
 import { handleSkills } from "./skills/handler";
+import { skillSources } from "./skills/sources";
+import { noticeHistory } from "./skills/history";
+import { skillApi } from "./skills/api";
+import { reviewRule, ruleSuggestions } from "./skills/agent";
 import { handleGroups } from "./groups/handler";
 import { handleGroupRunner } from "./groups/runner";
 import { methodNotAllowed } from "./platform/security";
@@ -34,6 +38,17 @@ export { RateLimiter } from "./platform/rate";
 export type { Env } from "./platform/env";
 
 export default {
+  async queue(batch: MessageBatch<string>, env: Env) {
+    for (const message of batch.messages) {
+      try {
+        await reviewRule(env, message.body);
+        message.ack();
+      } catch {
+        if (message.attempts >= 5 && env.GROUPS) await env.GROUPS.prepare("UPDATE skill_jobs SET status='failed' WHERE id=? AND status='pending'").bind(message.body).run();
+        message.retry();
+      }
+    }
+  },
   async fetch(req: Request, env: Env): Promise<Response> {
     const url = new URL(req.url);
     const p = url.pathname;
@@ -80,6 +95,23 @@ export default {
       if (p === "/skills") {
         if (m !== "GET") return methodNotAllowed("GET");
         return await handleSkills(req, env);
+      }
+      const sources = /^\/api\/skills\/([\w-]+)\/sources$/.exec(p);
+      if (p === "/api/skills") return m === "GET" ? await skillApi(req,env) : methodNotAllowed("GET");
+      const job = /^\/api\/jobs\/([\w-]+)$/.exec(p);
+      if (job) return m === "GET" ? await skillApi(req,env,job[1],"job") : methodNotAllowed("GET");
+      const section = /^\/api\/skills\/([\w-]+)\/(taxonomy|subscription)$/.exec(p);
+      if (section) return ["GET","POST"].includes(m) ? await skillApi(req,env,section[1],section[2]) : methodNotAllowed("GET, POST");
+      const history = /^\/api\/skills\/([\w-]+)\/notices$/.exec(p);
+      if (history) return m === "GET" ? await noticeHistory(req,env,history[1]) : methodNotAllowed("GET");
+      const suggestions = /^\/api\/skills\/([\w-]+)\/suggestions$/.exec(p);
+      if (suggestions) {
+        if (m !== "GET" && m !== "POST") return methodNotAllowed("GET, POST");
+        return await ruleSuggestions(req, env, suggestions[1]);
+      }
+      if (sources) {
+        if (m !== "GET" && m !== "POST") return methodNotAllowed("GET, POST");
+        return await skillSources(req, env, sources[1]);
       }
 
       // ---- 管理后台及机器接口 ------------------------------------------------------

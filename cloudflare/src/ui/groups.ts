@@ -1,4 +1,6 @@
 import YDS_SKILL from "../../../skills/yds/skill.json";
+import type { Preference, Taxonomy } from "../groups/types";
+import { allNotices } from "../skills/classification";
 import { parseConfig } from "../groups/repository";
 import type { GroupRow, Skill, Source } from "../groups/types";
 import { esc } from "../platform/security";
@@ -12,6 +14,8 @@ export type GroupView = (typeof GROUP_VIEWS)[number];
 const LABELS: Record<GroupView, string> = { mine: "我的通知组", subscribed: "已订阅", directory: "公开目录" };
 const SOURCE_STATUS = { ready: "试抓通过", blocked: "访问受限", error: "试抓失败" };
 const FEEDBACK: Record<string, string> = {
+  preferences: "个人接收范围已保存。",
+  taxonomy: "人员和通知类型已保存。",
   create: "通知组已创建。添加网址后，后台会自动试抓。",
   probe: "试抓已排队。请稍后刷新查看结果；调度每 15 分钟运行，可能有延迟。",
   settings: "通知设置已保存。",
@@ -64,6 +68,15 @@ function viewUrl(view: GroupView, id?: string): string {
   return `/groups?view=${view}${id ? `&id=${encodeURIComponent(id)}` : ""}`;
 }
 
+function preferenceFields(taxonomy: Taxonomy | undefined, preference: Preference) {
+  const filters = (["roles", "types"] as const).map(key => {
+    const labels = taxonomy?.[key] || [];
+    return labels.length ? `<fieldset><legend>${key === "roles" ? "适用人员" : "通知类型"}</legend>${labels.map(label => `<label><input type="checkbox" name="${key}" value="${esc(label)}"${preference[key].includes(label) ? " checked" : ""}> ${esc(label)}</label>`).join("")}</fieldset>` : "";
+  }).join("");
+  const modes = [["all","全部通知"], ...(filters ? [["selected","按下方分类接收"]] : []), ["paused","暂停接收"]];
+  return `<label>接收范围<select class="field" name="mode">${modes.map(([value,label]) => `<option value="${value}"${preference.mode === value ? " selected" : ""}>${label}</option>`).join("")}</select></label>${filters}`;
+}
+
 function editGroup(email: string, row: GroupRow, runnerReady: boolean, runnerLastSeen: number): string {
   const draft = parseConfig(row.draft);
   const skill = row.skill ? JSON.parse(row.skill) as Skill : null;
@@ -74,6 +87,7 @@ function editGroup(email: string, row: GroupRow, runnerReady: boolean, runnerLas
   const failedReview = row.visibility === "pending" && state.failed > 0;
   const nextAction = !draft.sources.length ? "添加要监控的网址" : state.failed ? "检查失败原因，修正网址或重新试抓" : state.waiting ? "等待后台试抓，稍后刷新查看结果" : !draft.enabled ? "试抓已通过，可以启用监控" : "监控已开启，有相关更新时会按设定频率通知你";
   return `${skillSettingsHeader(draft.name, "集中管理这组网站的来源、监控规则和通知。", groupStatus(row))}
+    <a href="/api/skills/${encodeURIComponent(row.id)}/notices">查看通知记录</a>
     <section class="group-summary"><div><span class="work-status work-status--${state.tone}">${state.label}</span><p>${nextAction}。</p><small>${state.ready} / ${draft.sources.length} 个网址已通过 · ${draft.enabled ? "监控已启用" : "监控已暂停"}${state.ready > 0 && state.ready < draft.sources.length ? " · 仅监控试抓通过的网址" : ""}</small></div><div class="work-actions">${draft.enabled || state.ready ? form(draft.enabled ? "pause" : "enable", draft.enabled ? "暂停监控" : "启用监控") : ""}<a class="button" href="${esc(viewUrl("mine", row.id))}">刷新状态</a></div></section>
     ${row.review_note ? `<p class="admin-feedback" role="status">${esc(row.review_note)}</p>` : ""}
     ${failedReview ? '<p class="admin-feedback" role="status">网址复检未通过。请查看失败的网址，修正或重试后重新提交审核。</p>' : ""}
@@ -87,19 +101,21 @@ function editGroup(email: string, row: GroupRow, runnerReady: boolean, runnerLas
           return `<article class="source-item" id="source-${index}"><div class="source-top"><a class="source-url" href="${esc(source.url)}" target="_blank" rel="noopener noreferrer">${esc(source.url)}<span class="sr-only">（新窗口打开）</span></a>${sourceStatus(source)}</div>
             <p class="${failed ? "source-error" : "sub"}">${esc(source.detail || "等待后台试抓。")}</p>
             ${source.checked ? `<small>最近检查：${esc(new Date(source.checked).toLocaleString("zh-CN", { timeZone: "Asia/Shanghai", hour12: false }))}（北京时间）</small>` : ""}
-            <div class="source-tools">${runnerReady ? form("probe", "重新试抓", sourceIndex) : ""}<details class="source-editor"${!source.prompt ? " open" : ""}><summary>编辑监控规则${source.sample ? "与查看样本" : ""}</summary><div class="source-editor-body">
-              ${form("prompt", "保存提示词", `${sourceIndex}<label for="prompt-${index}">监控提示词（必填，最多 600 字）</label><textarea id="prompt-${index}" class="field" name="prompt" maxlength="600" rows="3" required>${esc(source.prompt)}</textarea><span class="form-state" data-form-state role="status"></span>`)}
+            <div class="source-tools">${runnerReady ? form("probe", "重新试抓", sourceIndex) : ""}<details class="source-editor"><summary>查看监控规则和样本</summary><div class="source-editor-body">
+              <p>${esc(source.prompt || "等待生成监控提示词。")}</p><a href="/api/skills/${encodeURIComponent(row.id)}/suggestions">提出规则建议</a>
               ${source.sample ? `<details class="work-sample"><summary>查看试抓样本</summary><p>${esc(source.sample)}</p></details>` : '<p class="sub">试抓完成后会显示样本，方便确认抓取内容。</p>'}
               <details class="source-remove"><summary>移除此网址</summary><p>移除后不再监控这个来源，其他网址不受影响。</p>${form("remove-source", "确认移除网址", sourceIndex)}</details>
             </div></details></div></article>`;
         }).join("") || '<div class="empty-state"><h3>还没有监控来源</h3><p>在下方粘贴网址，可一次添加多个。</p></div>'}</div>
         ${draft.sources.length < 10 ? `<details class="source-add"${draft.sources.length ? "" : " open"}><summary>添加网址</summary>${form("add", runnerReady ? "添加并试抓" : "保存网址", `<label for="source-urls">网址（必填，每行一个）</label><textarea id="source-urls" class="field" inputmode="url" autocorrect="off" autocapitalize="none" spellcheck="false" name="urls" rows="3" maxlength="10000" placeholder="https://example.org/notices" required></textarea><span class="form-state" data-form-state role="status"></span>`)}</details>` : '<p class="sub">已添加 10 个网址。移除一个网址后可继续添加。</p>'}
       </section>
-      <section class="settings-panel" id="skill-rules"><h2>通知规则</h2><p>每个网址的“监控提示词”决定哪些变化值得通知；通知设置中的摘要规则决定如何概括。所有通知都附来源链接。</p><p class="sub">例如：只关注项目申报和截止日期变化，忽略新闻、导航和排版变化。</p></section>
+      <section class="settings-panel" id="skill-rules"><h2>人员与通知类型</h2><p>每行填写一个分类。公开版本通过审核后，订阅者可以按这些分类接收通知。</p>${form("taxonomy", "保存分类", `<label>适用人员<textarea name="roles" class="field" placeholder="学生&#10;指导教师">${esc((draft.taxonomy?.roles || []).join("\n"))}</textarea></label><label>通知类型<textarea name="types" class="field" placeholder="报名&#10;结果公示">${esc((draft.taxonomy?.types || []).join("\n"))}</textarea></label>`)}</section>
       <details class="settings-panel" id="skill-history"><summary>最近检查记录</summary><ul class="work-review-sources">${draft.sources.map(source => `<li><span class="source-url">${esc(source.url)}</span><p>${sourceStatus(source)} ${esc(source.detail || "等待后台试抓。")}</p></li>`).join("") || "<li>添加网址后显示最近一次运行结果。</li>"}</ul></details>
     </div><aside class="settings-secondary" aria-label="此网站组的通知设置">
       <section class="settings-panel" id="skill-delivery"><h2>通知设置</h2><p>接收邮箱</p><p class="delivery-email">${esc(email)}</p>
-        ${form("settings", "保存通知设置", `<label for="group-frequency">推送频率</label><select id="group-frequency" class="field" name="frequency" aria-describedby="frequency-help">${[["instant", "有更新就通知"], ["daily", "每天汇总"], ["weekly", "每周汇总"]].map(([value, label]) => `<option value="${value}"${(draft.frequency || "instant") === value ? " selected" : ""}>${label}</option>`).join("")}</select><p id="frequency-help" class="sub">日报在北京时间 10:00 后、周报在周一 10:00 后随任务发送。</p><label for="group-guidance">摘要规则（最多 600 字）</label><textarea id="group-guidance" class="field" name="guidance" rows="5" maxlength="600">${esc(draft.guidance ?? WEB_MONITOR.summaryGuidance)}</textarea><span class="form-state" data-form-state role="status"></span>`)}
+        ${form("preferences","保存我的接收范围",preferenceFields(draft.taxonomy,row.owner_preference ? JSON.parse(row.owner_preference) : allNotices))}
+        ${form("settings", "保存通知设置", `<label for="group-frequency">推送频率</label><select id="group-frequency" class="field" name="frequency">${[["instant", "有更新就通知"], ["daily", "每天汇总"], ["weekly", "每周汇总"]].map(([value, label]) => `<option value="${value}"${(draft.frequency || "instant") === value ? " selected" : ""}>${label}</option>`).join("")}</select>`)}
+        <h3>摘要规则</h3><p>${esc(draft.guidance ?? WEB_MONITOR.summaryGuidance)}</p><a href="/api/skills/${encodeURIComponent(row.id)}/suggestions">查看规则与审核记录</a>
       </section>
       <details class="settings-panel"><summary>公开设置</summary>
         ${row.visibility === "pending" ? "<p>已提交审核。修改网址、组名或提示词后需要重新提交。</p>" : !runnerReady ? "<p>试抓服务恢复后可提交公开审核。</p>" : canReview ? form("request-public", row.published ? "提交更新审核" : "申请公开", `<label class="work-check"><input type="checkbox" name="confirm" value="yes" required> 同意在公开目录显示我的已验证邮箱 ${esc(email)}</label>`) : "<p>所有网址试抓通过并填写提示词后，可以申请公开。</p>"}
@@ -110,7 +126,7 @@ function editGroup(email: string, row: GroupRow, runnerReady: boolean, runnerLas
     </aside></div>`;
 }
 
-export function groupsPage(email: string, groups: GroupRow[], subscriptions: Map<string, string>, canCreate: boolean, url: URL, runnerReady: boolean, runnerLastSeen = 0): Response {
+export function groupsPage(email: string, groups: GroupRow[], subscriptions: Map<string, string>, canCreate: boolean, url: URL, runnerReady: boolean, runnerLastSeen = 0, preferences = new Map<string, Preference>()): Response {
   const own = groups.filter(row => row.owner === email);
   const published = groups.filter(row => row.published && row.owner !== email);
   const subscribed = published.filter(row => subscriptions.has(row.id));
@@ -144,10 +160,11 @@ export function groupsPage(email: string, groups: GroupRow[], subscriptions: Map
     const cards = (directory ? published : subscribed).map(row => {
       const config = parseConfig(row.published!);
       const frequency = subscriptions.get(row.id);
+      const preference = preferences.get(row.id) || allNotices;
       return `<section class="work-panel"><div class="work-heading"><div><h3>${esc(config.name)}</h3><p>公开者 ${esc(row.owner)}</p></div>
         <span class="work-status${frequency ? " work-status--ready" : ""}">${frequency ? "已订阅" : config.enabled ? "监控中" : "已暂停"}</span></div>
-        <details><summary>${config.sources.length} 个监控网址</summary><ul class="work-urls">${config.sources.map(source => `<li>${esc(source.url)}</li>`).join("")}</ul></details>
-        <div class="work-actions">${groupForm("subscribe", row.id, frequency ? "保存频率" : "订阅", `<input type="hidden" name="view" value="${view}"><label>推送频率
+        <details><summary>${config.sources.length} 个监控网址</summary><ul class="work-urls">${config.sources.map(source => `<li>${esc(source.url)}</li>`).join("")}</ul></details>${frequency ? `<a href="/api/skills/${encodeURIComponent(row.id)}/notices">查看通知记录</a>` : ""}
+        <div class="work-actions">${groupForm("subscribe", row.id, frequency ? "保存订阅设置" : "订阅", `<input type="hidden" name="view" value="${view}">${preferenceFields(config.taxonomy,preference)}<label>推送频率
           <select class="field" name="frequency">${[["instant","即时"],["daily","日报"],["weekly","周报"]].map(([key,label]) => `<option value="${key}"${frequency === key ? " selected" : ""}>${label}</option>`).join("")}</select></label>`)}
         ${frequency ? groupForm("unsubscribe", row.id, "退出订阅", `<input type="hidden" name="view" value="${view}">`) : ""}</div></section>`;
     }).join("");

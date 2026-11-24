@@ -42,7 +42,8 @@ def assess_change(client: AiClient, prompt: str, previous: str, current: str, gu
         client,
         "仅按组主的 prompt 判断新旧样本是否有值得通知的实质变化。guidance 只指导摘要写法。"
         "样本相同或仅排版变化时 relevant 为 false，否则按 prompt 判断。"
-        "摘要写明样本支持的变化与关键事实。输出 JSON，包含布尔 relevant 和短文本 summary。",
+        "摘要写明样本支持的变化与关键事实。输出布尔 relevant、短文本 summary。"
+        "原文有明确活动日期时可附 eventDate，只接受原文中的 YYYY-MM-DD。",
         prompt=prompt, previous=previous, current=current, guidance=guidance,
     )
 
@@ -104,6 +105,22 @@ def skill_candidate(client: AiClient, skill: dict, before: list, after: list, ch
     return evaluated
 
 
+def verify_prompt(client: AiClient, prompt: str, sample: str) -> bool:
+    """新生成的提示词必须能命中真实样本，并给出样本中的逐字依据。"""
+    if not client.cfg.usable or not sample:
+        return False
+    verdict = ask(
+        client,
+        "判断这条监控提示词是否会选中给定样本中的条目。只按提示词本身的触发条件判断。"
+        '匹配时输出 JSON {"matched":true,"quote":"样本中支持该判断的逐字片段"}；'
+        "不匹配时输出 matched 为 false。引文必须逐字出现在样本里。",
+        prompt=prompt, sample=sample[:1200],
+    )
+    quote = verdict.get("quote")
+    return (verdict.get("matched") is True and isinstance(quote, str)
+            and bool(quote.strip()) and quote.strip() in sample)
+
+
 def scan(config: dict, probe: SiteProbe, client: AiClient, guidance: str = "", recheck: bool = False):
     sources = []
     changes = []
@@ -129,10 +146,14 @@ def scan(config: dict, probe: SiteProbe, client: AiClient, guidance: str = "", r
                 '忽略导航、页脚和排版。站点说明仅作为背景。正文不足时返回空对象。'
                 '输出 JSON {"prompt":"不超过 600 字的一句规则"}。',
                 sample=excerpt, site_guide=hints,
+                purpose=config.get("name"), taxonomy=config.get("taxonomy"),
             )
             prompt = suggestion.get("prompt")
             prompt = prompt.strip() if isinstance(prompt, str) else ""
-            source["prompt"] = prompt if 0 < len(prompt) <= 600 else DEFAULT_MONITOR_PROMPT
+            # 提示词只有在真实样本上验证通过后才生效，否则保留旧规则。
+            source["prompt"] = (prompt if 0 < len(prompt) <= 600
+                                and verify_prompt(client, prompt, excerpt)
+                                else source["prompt"] or DEFAULT_MONITOR_PROMPT)
         if old and old != digest and config["enabled"]:
             verdict = assess_change(client, source["prompt"], source["sample"], excerpt, guidance)
             if client.cfg.usable and not isinstance(verdict.get("relevant"), bool):
@@ -140,8 +161,23 @@ def scan(config: dict, probe: SiteProbe, client: AiClient, guidance: str = "", r
                 continue
             if verdict.get("relevant") is not False:
                 summary = verdict.get("summary")
-                changes.append({"url": url, "summary": summary[:800] if isinstance(summary, str) and summary.strip()
-                                else "此来源的内容有变化，请查看原文。"})
+                change = {"url": url, "summary": summary[:800] if isinstance(summary, str) and summary.strip()
+                          else "此来源的内容有变化，请查看原文。"}
+                event_date = verdict.get("eventDate")
+                if isinstance(event_date, str) and len(event_date) == 10 and event_date in excerpt:
+                    change["eventDate"] = event_date
+                taxonomy = config.get("taxonomy") or {}
+                if any(taxonomy.values()):
+                    classification = ask(client, "按变动内容选择适用人员 roles 与通知类型 types。仅使用 taxonomy 中的标签，"
+                                         "无依据时返回空数组。输出含 roles 和 types 数组的 JSON。",
+                                         previous=source["sample"], current=excerpt, summary=summary, taxonomy=taxonomy)
+                    if client.cfg.usable and not all(isinstance(classification.get(key), list) for key in ("roles", "types")):
+                        source.update(status="ready", detail="分类暂未完成，下轮重试。", checked=True)
+                        continue
+                    for key in ("roles", "types"):
+                        assigned = classification.get(key, [])
+                        change[key] = [label for label in taxonomy.get(key, []) if label in assigned]
+                changes.append(change)
         source.update(status="ready", detail="已完成站点规则检查和试抓。", baseline=digest, sample=excerpt, checked=True)
     return sources, changes
 

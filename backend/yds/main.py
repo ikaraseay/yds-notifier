@@ -50,6 +50,7 @@ from .schedule import (
 )
 from ..skills import BUILTIN_SKILLS, DEFAULT_SKILL, load_skill
 from .sources import BaseSource, build_sources
+from .shared_sources import shared_notices
 from .state import State
 from ..store import STATE_FILES, StateConflict, StateUnavailable, build_store
 from ..notifications.unsub import build_unsubscribe_url
@@ -389,6 +390,11 @@ def main(argv: List[str] | None = None) -> int:
         else:
             log.info("本轮列表中没有「赛程一览」，跳过刷新（沿用缓存 %s 项）", len(schedule.contests))
 
+    # 共享网址的通知在赛程刷新之后并入：官方赛程只认官方列表，
+    # 避免自定义网址被当成赛程来源抓取。
+    if skill.id == "yds":
+        meta.extend(shared_notices())
+
     reminder_pool = (
         schedule.reminders(today_date, sched_horizons, sched_include)
         if sched_enabled else []
@@ -512,6 +518,7 @@ def main(argv: List[str] | None = None) -> int:
                 "detail_hash": n.detail_hash,
             }
             for n in all_items.values()
+            if n.source_key != "yds_shared"
         ]
         # 只为「缓存也没有结果」的历史条目抓正文，每轮限量，收敛后不再请求官网
         hosts = sorted({

@@ -7,7 +7,7 @@ export function skillSettingsHeader(name: string, description: string, status: s
     <div class="work-heading"><p>${esc(description)}</p><span class="work-status">${esc(status)}</span></div>
     <nav class="work-tabs section-nav" aria-label="Skill 设置">
       <a href="#skill-sources">监控来源</a><a href="#skill-rules">通知规则</a>
-      <a href="#skill-delivery">通知设置</a>${builtin ? '<a href="/archive">通知记录</a>' : '<a href="#skill-history">最近检查</a>'}
+      <a href="#skill-delivery">通知设置</a>${builtin ? '<a href="/api/skills/yds/notices">通知记录</a>' : '<a href="#skill-history">最近检查</a>'}
     </nav></header>`;
 }
 
